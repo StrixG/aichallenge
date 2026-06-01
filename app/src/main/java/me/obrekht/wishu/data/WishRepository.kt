@@ -19,16 +19,17 @@ class WishRepository(
         wishDao.delete(wish)
     }
 
-    suspend fun generateWishIdea(): String {
+    suspend fun generateWishIdea(prompt: String): String {
         val request = ChatRequest(
-            model = "deepseek-chat",
+            model = "deepseek-v4-flash",
             messages = listOf(
                 ChatMessage(
-                    role = "user",
-                    content = "Suggest one wishlist item in one short sentence. Reply with just the item, no explanation."
-                )
+                    role = "system",
+                    content = "You are a helpful assistant that suggests realistic and desirable wishlist items. Always respond with a single item only — no lists, no explanations, no punctuation at the end."
+                ),
+                ChatMessage(role = "user", content = prompt)
             ),
-            maxTokens = 50
+            maxTokens = 500
         )
         return deepSeekApi.chatCompletions(request).choices.first().message.content.trim()
     }

@@ -1,6 +1,8 @@
 package me.obrekht.wishu.ui
 
 import android.app.Application
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,7 +16,7 @@ import me.obrekht.wishu.data.WishRepository
 
 data class WishlistUiState(
     val wishes: List<Wish> = emptyList(),
-    val inputText: String = "",
+    val inputText: TextFieldValue = TextFieldValue(),
     val isGenerating: Boolean = false,
     val errorMessage: String? = null
 )
@@ -34,16 +36,16 @@ class WishlistViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun onInputChange(text: String) {
-        _uiState.update { it.copy(inputText = text) }
+    fun onInputChange(value: TextFieldValue) {
+        _uiState.update { it.copy(inputText = value) }
     }
 
     fun addWish() {
-        val text = _uiState.value.inputText.trim()
+        val text = _uiState.value.inputText.text.trim()
         if (text.isBlank()) return
         viewModelScope.launch {
             repository.addWish(text)
-            _uiState.update { it.copy(inputText = "") }
+            _uiState.update { it.copy(inputText = TextFieldValue()) }
         }
     }
 
@@ -56,10 +58,10 @@ class WishlistViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _uiState.update { it.copy(isGenerating = true, errorMessage = null) }
             try {
-                val idea = repository.generateWishIdea()
-                _uiState.update { it.copy(inputText = idea, isGenerating = false) }
+                val idea = repository.generateWishIdea(app.getString(me.obrekht.wishu.R.string.prompt_generate_wish))
+                _uiState.update { it.copy(inputText = TextFieldValue(idea, selection = TextRange(idea.length)), isGenerating = false) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(isGenerating = false, errorMessage = "Failed to generate idea") }
+                _uiState.update { it.copy(isGenerating = false, errorMessage = app.getString(me.obrekht.wishu.R.string.error_generate_idea)) }
             }
         }
     }

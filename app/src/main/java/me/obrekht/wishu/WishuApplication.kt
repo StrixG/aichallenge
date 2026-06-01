@@ -1,13 +1,14 @@
 package me.obrekht.wishu
 
 import android.app.Application
-import me.obrekht.wishu.data.WishDatabase
-import me.obrekht.wishu.network.DeepSeekApi
-import okhttp3.OkHttpClient
-import retrofit2.Retrofit
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
+import me.obrekht.wishu.data.WishDatabase
+import me.obrekht.wishu.network.DeepSeekApi
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
 
 class WishuApplication : Application() {
 
@@ -22,11 +23,19 @@ class WishuApplication : Application() {
                         .build()
                 )
             }
+            .apply {
+                if (BuildConfig.DEBUG) {
+                    addNetworkInterceptor(
+                        HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
+                    )
+                }
+            }
             .build()
+        val json = Json { ignoreUnknownKeys = true }
         Retrofit.Builder()
             .baseUrl("https://api.deepseek.com/")
             .client(client)
-            .addConverterFactory(Json.asConverterFactory("application/json".toMediaType()))
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
             .create(DeepSeekApi::class.java)
     }

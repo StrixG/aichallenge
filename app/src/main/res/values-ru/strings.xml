@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wishu</string>
+    <string name="wishlist_title">Мой список желаний</string>
+    <string name="cd_generate_wish">Генерировать идею желания</string>
+    <string name="hint_add_wish">Добавить желание…</string>
+    <string name="cd_add_wish">Добавить желание</string>
+    <string name="cd_delete_wish">Удалить желание</string>
+    <string name="empty_wishlist">Желаний пока нет. Добавьте первое!</string>
+    <string name="error_generate_idea">Не удалось сгенерировать идею</string>
+    <string name="prompt_generate_wish">Предложи один реалистичный и желанный пункт списка желаний, который люди действительно хотят. Ответь только самим пунктом, без объяснений.</string>
+    <string name="cd_settings">Настройки</string>
+    <string name="settings_title">Настройки</string>
+    <string name="cd_navigate_back">Назад</string>
+    <string name="language_label">Язык</string>
+    <string name="language_system_default">Системный язык</string>
+</resources>
