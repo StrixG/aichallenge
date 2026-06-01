@@ -25,7 +25,7 @@ class WishRepository(
             messages = listOf(
                 ChatMessage(
                     role = "system",
-                    content = "You are a helpful assistant that suggests realistic and desirable wishlist items. Always respond with a single item only — no lists, no explanations, no punctuation at the end."
+                    content = "You are a helpful assistant that suggests realistic and desirable wishlist items. Always respond with a single item only — no lists, no explanations, no punctuation at the end. Always respond in the same language as the user's message."
                 ),
                 ChatMessage(role = "user", content = prompt)
             ),
