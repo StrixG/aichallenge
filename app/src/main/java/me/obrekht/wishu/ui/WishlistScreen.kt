@@ -154,7 +154,6 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
             }
         }
     ) { padding ->
-
         if (uiState.wishes.isEmpty()) {
             Box(
                 modifier = Modifier
