@@ -8,7 +8,12 @@
     <string name="cd_delete_wish">Удалить желание</string>
     <string name="empty_wishlist">Желаний пока нет. Добавьте первое!</string>
     <string name="error_generate_idea">Не удалось сгенерировать идею</string>
-    <string name="prompt_generate_wish">Предложи один реалистичный и желанный пункт списка желаний, который люди действительно хотят. Ответь только самим пунктом, без объяснений.</string>
+    <string name="prompt_generate_wish">Предложи мне несколько идей для списка желаний.</string>
+    <string name="suggestions_title">Выберите желания для добавления</string>
+    <string name="suggestions_add">Добавить выбранные</string>
+    <string name="suggestions_cancel">Отмена</string>
+    <string name="comparison_unconstrained">Ответ без ограничений</string>
+    <string name="comparison_close">Закрыть</string>
     <string name="cd_settings">Настройки</string>
     <string name="settings_title">Настройки</string>
     <string name="cd_navigate_back">Назад</string>

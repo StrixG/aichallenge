@@ -18,6 +18,9 @@ class WishuApplication : Application() {
 
     val deepSeekApi: DeepSeekApi by lazy {
         val client = OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(90, java.util.concurrent.TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 chain.proceed(
                     chain.request().newBuilder()
@@ -33,7 +36,11 @@ class WishuApplication : Application() {
                 }
             }
             .build()
-        val json = Json { ignoreUnknownKeys = true }
+        val json = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            explicitNulls = false
+        }
         Retrofit.Builder()
             .baseUrl("https://api.deepseek.com/")
             .client(client)
