@@ -1,11 +1,10 @@
 package me.obrekht.wishu.ui
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,19 +17,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -41,19 +46,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.launch
 import me.obrekht.wishu.R
 import me.obrekht.wishu.data.Wish
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel = viewModel()) {
     val uiState by viewModel.uiState.collectAsState()
@@ -66,39 +70,25 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
         }
     }
 
-    val sparkleScale = remember { Animatable(1f) }
-    val sparkleAlpha = remember { Animatable(0f) }
-
-    LaunchedEffect(uiState.isGenerating) {
-        if (!uiState.isGenerating && uiState.inputText.text.isNotBlank()) {
-            launch {
-                sparkleScale.animateTo(
-                    1.05f,
-                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-                )
-                sparkleScale.animateTo(
-                    1f,
-                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium)
-                )
-            }
-            launch {
-                sparkleAlpha.animateTo(0.25f, tween(150))
-                sparkleAlpha.animateTo(0f, tween(600))
-            }
-        }
-    }
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.wishlist_title)) },
                 actions = {
-                    IconButton(
-                        onClick = { viewModel.generateWishIdea() },
-                        enabled = !uiState.isGenerating
+                    val busy = uiState.isGenerating || uiState.isGeneratingUnconstrained
+                    Box(
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .size(48.dp)
+                            .combinedClickable(
+                                enabled = !busy,
+                                onClick = { viewModel.generateWishIdea() },
+                                onLongClick = { viewModel.generateUnconstrained() }
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        if (uiState.isGenerating) {
+                        if (busy) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(24.dp),
                                 strokeWidth = 2.dp
@@ -125,24 +115,13 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .scale(sparkleScale.value)
-                    ) {
-                        TextField(
-                            value = uiState.inputText,
-                            onValueChange = { viewModel.onInputChange(it) },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(R.string.hint_add_wish)) },
-                            maxLines = 8
-                        )
-                        Box(
-                            modifier = Modifier
-                                .matchParentSize()
-                                .background(Color(0xFF9C27B0).copy(alpha = sparkleAlpha.value))
-                        )
-                    }
+                    TextField(
+                        value = uiState.inputText,
+                        onValueChange = { viewModel.onInputChange(it) },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text(stringResource(R.string.hint_add_wish)) },
+                        maxLines = 8
+                    )
                     Spacer(Modifier.width(8.dp))
                     IconButton(
                         onClick = { viewModel.addWish() },
@@ -154,6 +133,19 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
             }
         }
     ) { padding ->
+        if (uiState.suggestions.isNotEmpty()) {
+            SuggestionsDialog(
+                suggestions = uiState.suggestions,
+                onAdd = { viewModel.addSuggestions(it) },
+                onDismiss = { viewModel.dismissSuggestions() }
+            )
+        }
+        uiState.unconstrainedResult?.let { result ->
+            UnconstrainedDialog(
+                result = result,
+                onDismiss = { viewModel.dismissUnconstrained() }
+            )
+        }
         if (uiState.wishes.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -179,6 +171,78 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
             }
         }
     }
+}
+
+@Composable
+private fun SuggestionsDialog(
+    suggestions: List<String>,
+    onAdd: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val selected = remember(suggestions) { mutableStateListOf(*suggestions.toTypedArray()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.suggestions_title)) },
+        text = {
+            Column {
+                suggestions.forEach { suggestion ->
+                    val isChecked = suggestion in selected
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (isChecked) selected.remove(suggestion) else selected.add(suggestion)
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = isChecked,
+                            onCheckedChange = {
+                                if (it) selected.add(suggestion) else selected.remove(suggestion)
+                            }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(suggestion, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onAdd(selected.toList()) },
+                enabled = selected.isNotEmpty()
+            ) {
+                Text(stringResource(R.string.suggestions_add))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.suggestions_cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun UnconstrainedDialog(
+    result: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.comparison_unconstrained)) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(result, style = MaterialTheme.typography.bodyMedium)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.comparison_close))
+            }
+        }
+    )
 }
 
 @Composable

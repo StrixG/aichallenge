@@ -8,7 +8,12 @@
     <string name="cd_delete_wish">Delete wish</string>
     <string name="empty_wishlist">No wishes yet. Add one below!</string>
     <string name="error_generate_idea">Failed to generate idea</string>
-    <string name="prompt_generate_wish">Suggest one realistic and desirable wishlist item that people actually want. Reply with just the item, no explanation.</string>
+    <string name="prompt_generate_wish">Suggest some wishlist ideas for me.</string>
+    <string name="suggestions_title">Pick wishes to add</string>
+    <string name="suggestions_add">Add selected</string>
+    <string name="suggestions_cancel">Cancel</string>
+    <string name="comparison_unconstrained">Unconstrained response</string>
+    <string name="comparison_close">Close</string>
     <string name="cd_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="cd_navigate_back">Navigate back</string>

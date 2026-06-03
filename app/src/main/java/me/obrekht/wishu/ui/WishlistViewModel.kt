@@ -1,7 +1,6 @@
 package me.obrekht.wishu.ui
 
 import android.app.Application
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -18,6 +17,9 @@ data class WishlistUiState(
     val wishes: List<Wish> = emptyList(),
     val inputText: TextFieldValue = TextFieldValue(),
     val isGenerating: Boolean = false,
+    val suggestions: List<String> = emptyList(),
+    val isGeneratingUnconstrained: Boolean = false,
+    val unconstrainedResult: String? = null,
     val errorMessage: String? = null
 )
 
@@ -61,12 +63,48 @@ class WishlistViewModel(application: Application) : AndroidViewModel(application
             _uiState.update { it.copy(isGenerating = true, errorMessage = null) }
             try {
                 val model = settingsRepository.selectedModel.value
-                val idea = repository.generateWishIdea(app.getString(me.obrekht.wishu.R.string.prompt_generate_wish), model)
-                _uiState.update { it.copy(inputText = TextFieldValue(idea, selection = TextRange(idea.length)), isGenerating = false) }
+                val ideas = repository.generateWishIdeas(app.getString(me.obrekht.wishu.R.string.prompt_generate_wish), model)
+                _uiState.update { it.copy(suggestions = ideas, isGenerating = false) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(isGenerating = false, errorMessage = app.getString(me.obrekht.wishu.R.string.error_generate_idea)) }
             }
         }
+    }
+
+    fun addSuggestions(ideas: List<String>) {
+        if (ideas.isEmpty()) {
+            dismissSuggestions()
+            return
+        }
+        viewModelScope.launch {
+            ideas.forEach { repository.addWish(it) }
+            _uiState.update { it.copy(suggestions = emptyList()) }
+        }
+    }
+
+    fun dismissSuggestions() {
+        _uiState.update { it.copy(suggestions = emptyList()) }
+    }
+
+    fun generateUnconstrained() {
+        if (_uiState.value.isGeneratingUnconstrained) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGeneratingUnconstrained = true, errorMessage = null) }
+            try {
+                val model = settingsRepository.selectedModel.value
+                val result = repository.generateUnconstrained(
+                    app.getString(me.obrekht.wishu.R.string.prompt_generate_wish),
+                    model
+                )
+                _uiState.update { it.copy(unconstrainedResult = result, isGeneratingUnconstrained = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isGeneratingUnconstrained = false, errorMessage = app.getString(me.obrekht.wishu.R.string.error_generate_idea)) }
+            }
+        }
+    }
+
+    fun dismissUnconstrained() {
+        _uiState.update { it.copy(unconstrainedResult = null) }
     }
 
     fun clearError() {
