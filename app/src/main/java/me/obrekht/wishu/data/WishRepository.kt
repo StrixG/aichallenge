@@ -19,9 +19,9 @@ class WishRepository(
         wishDao.delete(wish)
     }
 
-    suspend fun generateWishIdea(prompt: String): String {
+    suspend fun generateWishIdea(prompt: String, model: String): String {
         val request = ChatRequest(
-            model = "deepseek-v4-flash",
+            model = model,
             messages = listOf(
                 ChatMessage(
                     role = "system",

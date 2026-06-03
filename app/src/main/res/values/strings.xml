@@ -14,4 +14,5 @@
     <string name="cd_navigate_back">Navigate back</string>
     <string name="language_label">Language</string>
     <string name="language_system_default">System default</string>
+    <string name="model_label">AI Model</string>
 </resources>

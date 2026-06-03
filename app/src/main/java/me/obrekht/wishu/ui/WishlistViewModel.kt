@@ -22,8 +22,10 @@ data class WishlistUiState(
 )
 
 class WishlistViewModel(application: Application) : AndroidViewModel(application) {
+
     private val app = application as WishuApplication
     private val repository = WishRepository(app.database.wishDao(), app.deepSeekApi)
+    private val settingsRepository = app.settingsRepository
 
     private val _uiState = MutableStateFlow(WishlistUiState())
     val uiState: StateFlow<WishlistUiState> = _uiState.asStateFlow()
@@ -58,7 +60,8 @@ class WishlistViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _uiState.update { it.copy(isGenerating = true, errorMessage = null) }
             try {
-                val idea = repository.generateWishIdea(app.getString(me.obrekht.wishu.R.string.prompt_generate_wish))
+                val model = settingsRepository.selectedModel.value
+                val idea = repository.generateWishIdea(app.getString(me.obrekht.wishu.R.string.prompt_generate_wish), model)
                 _uiState.update { it.copy(inputText = TextFieldValue(idea, selection = TextRange(idea.length)), isGenerating = false) }
             } catch (e: Exception) {
                 _uiState.update { it.copy(isGenerating = false, errorMessage = app.getString(me.obrekht.wishu.R.string.error_generate_idea)) }
