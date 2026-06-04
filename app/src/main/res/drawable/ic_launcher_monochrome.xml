@@ -4,11 +4,9 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- main sparkle -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M54,28 C56.5,44 64,51.5 80,54 C64,56.5 56.5,64 54,80 C51.5,64 44,56.5 28,54 C44,51.5 51.5,44 54,28 Z" />
-    <!-- small sparkle -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M77,30 C77.8,34.5 79.5,36.2 84,37 C79.5,37.8 77.8,39.5 77,44 C76.2,39.5 74.5,37.8 70,37 C74.5,36.2 76.2,34.5 77,30 Z" />
