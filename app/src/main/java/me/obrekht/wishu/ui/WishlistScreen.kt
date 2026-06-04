@@ -101,7 +101,7 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                         contentAlignment = Alignment.Center
                     ) {
                         if (busy) {
-                            LoadingIndicator()
+                            LoadingIndicator(color = MaterialTheme.colorScheme.onPrimaryContainer)
                         } else {
                             Icon(
                                 Icons.Rounded.AutoAwesome,
