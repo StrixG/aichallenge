@@ -1,6 +1,5 @@
 package me.obrekht.wishu.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -54,8 +53,6 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit,
     viewModel: SettingsViewModel = viewModel()
 ) {
-    BackHandler(onBack = onNavigateBack)
-
     val languages = listOf(
         LanguageOption("", stringResource(R.string.language_system_default)),
         LanguageOption("en", "English"),
