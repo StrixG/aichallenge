@@ -31,7 +31,7 @@ class WishRepository(
                         "Always respond with exactly 3 distinct items, one per line, with no numbering, no bullets, " +
                         "no explanations, and no punctuation at the end. Each item must be at most 5 words. " +
                         "After the third item output the token \"END\" on its own line and stop. " +
-                        "Always respond in cthe same language as the user's message."
+                        "Always respond in the same language as the user's message."
                 ),
                 ChatMessage(role = "user", content = prompt)
             ),
