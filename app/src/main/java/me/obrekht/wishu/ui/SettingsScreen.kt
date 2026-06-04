@@ -12,9 +12,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -81,7 +81,7 @@ fun SettingsScreen(
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            Icons.AutoMirrored.Rounded.ArrowBack,
                             contentDescription = stringResource(R.string.cd_navigate_back)
                         )
                     }
@@ -98,7 +98,7 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             SettingsSection(
-                icon = Icons.Filled.Language,
+                icon = Icons.Rounded.Language,
                 title = stringResource(R.string.language_label)
             ) {
                 languages.forEachIndexed { index, option ->
@@ -120,7 +120,7 @@ fun SettingsScreen(
             }
 
             SettingsSection(
-                icon = Icons.Filled.Memory,
+                icon = Icons.Rounded.Memory,
                 title = stringResource(R.string.model_label)
             ) {
                 models.forEachIndexed { index, option ->

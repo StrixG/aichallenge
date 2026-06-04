@@ -24,10 +24,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
@@ -104,7 +104,7 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                             LoadingIndicator()
                         } else {
                             Icon(
-                                Icons.Default.AutoAwesome,
+                                Icons.Rounded.AutoAwesome,
                                 contentDescription = stringResource(R.string.cd_generate_wish),
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
@@ -112,7 +112,7 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                     }
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.cd_settings))
+                        Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.cd_settings))
                     }
                 }
             )
@@ -147,7 +147,7 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                         onClick = { viewModel.addWish() },
                         enabled = uiState.inputText.text.isNotBlank()
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.cd_add_wish))
+                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = stringResource(R.string.cd_add_wish))
                     }
                 }
             }
@@ -176,7 +176,7 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                 verticalArrangement = Arrangement.Center
             ) {
                 Icon(
-                    Icons.Default.AutoAwesome,
+                    Icons.Rounded.AutoAwesome,
                     contentDescription = null,
                     modifier = Modifier.size(56.dp),
                     tint = MaterialTheme.colorScheme.primary
@@ -291,7 +291,7 @@ private fun WishItem(wish: Wish, onDelete: () -> Unit, modifier: Modifier = Modi
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             trailingContent = {
                 FilledTonalIconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.cd_delete_wish))
+                    Icon(Icons.Rounded.Delete, contentDescription = stringResource(R.string.cd_delete_wish))
                 }
             }
         )
