@@ -6,12 +6,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import android.graphics.Color
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import me.obrekht.wishu.ui.SettingsScreen
+import me.obrekht.wishu.ui.WishuTheme
 import me.obrekht.wishu.ui.WishlistScreen
 
 class MainActivity : AppCompatActivity() {
@@ -21,7 +21,7 @@ class MainActivity : AppCompatActivity() {
             statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
         )
         setContent {
-            MaterialTheme {
+            WishuTheme {
                 var showSettings by rememberSaveable { mutableStateOf(false) }
                 if (showSettings) {
                     SettingsScreen(onNavigateBack = { showSettings = false })
