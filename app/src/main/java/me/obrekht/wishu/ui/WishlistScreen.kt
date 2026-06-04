@@ -1,5 +1,11 @@
 package me.obrekht.wishu.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -100,14 +106,23 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (busy) {
-                            LoadingIndicator(color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        } else {
-                            Icon(
-                                Icons.Rounded.AutoAwesome,
-                                contentDescription = stringResource(R.string.cd_generate_wish),
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                        AnimatedContent(
+                            targetState = busy,
+                            transitionSpec = {
+                                (fadeIn() + scaleIn(initialScale = 0.6f)) togetherWith
+                                    (fadeOut() + scaleOut(targetScale = 0.6f))
+                            },
+                            label = "generate"
+                        ) { isBusy ->
+                            if (isBusy) {
+                                LoadingIndicator(color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            } else {
+                                Icon(
+                                    Icons.Rounded.AutoAwesome,
+                                    contentDescription = stringResource(R.string.cd_generate_wish),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.width(4.dp))
