@@ -196,7 +196,11 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 items(uiState.wishes, key = { it.id }) { wish ->
-                    WishItem(wish = wish, onDelete = { viewModel.deleteWish(wish) })
+                    WishItem(
+                        wish = wish,
+                        onDelete = { viewModel.deleteWish(wish) },
+                        modifier = Modifier.animateItem()
+                    )
                 }
             }
         }
@@ -276,9 +280,9 @@ private fun UnconstrainedDialog(
 }
 
 @Composable
-private fun WishItem(wish: Wish, onDelete: () -> Unit) {
+private fun WishItem(wish: Wish, onDelete: () -> Unit, modifier: Modifier = Modifier) {
     ElevatedCard(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
     ) {
