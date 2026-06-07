@@ -33,11 +33,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Layers
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Thermostat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -64,7 +68,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,6 +87,7 @@ fun WishlistScreen(
     onOpenSettings: () -> Unit = {},
     onOpenReasoning: () -> Unit = {},
     onOpenTemperature: () -> Unit = {},
+    onOpenModels: () -> Unit = {},
     viewModel: WishlistViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -133,14 +140,32 @@ fun WishlistScreen(
                         }
                     }
                     Spacer(Modifier.width(4.dp))
-                    IconButton(onClick = onOpenReasoning) {
-                        Icon(Icons.Rounded.Psychology, contentDescription = "Способы рассуждения")
+                    // Experiment screens + settings collapsed into one overflow menu to keep the bar uncluttered.
+                    var menuOpen by remember { mutableStateOf(false) }
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.cd_more))
                     }
-                    IconButton(onClick = onOpenTemperature) {
-                        Icon(Icons.Rounded.Thermostat, contentDescription = "Температура")
-                    }
-                    IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.cd_settings))
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Способы рассуждения") },
+                            leadingIcon = { Icon(Icons.Rounded.Psychology, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenReasoning() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Температура") },
+                            leadingIcon = { Icon(Icons.Rounded.Thermostat, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenTemperature() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Версии моделей") },
+                            leadingIcon = { Icon(Icons.Rounded.Layers, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenModels() }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.settings_title)) },
+                            leadingIcon = { Icon(Icons.Rounded.Settings, contentDescription = null) },
+                            onClick = { menuOpen = false; onOpenSettings() }
+                        )
                     }
                 }
             )

@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import me.obrekht.wishu.ui.ModelsScreen
 import me.obrekht.wishu.ui.ReasoningScreen
 import me.obrekht.wishu.ui.SettingsScreen
 import me.obrekht.wishu.ui.TemperatureScreen
@@ -26,7 +27,8 @@ class MainActivity : AppCompatActivity() {
                         WishlistScreen(
                             onOpenSettings = { navController.navigate("settings") },
                             onOpenReasoning = { navController.navigate("reasoning") },
-                            onOpenTemperature = { navController.navigate("temperature") }
+                            onOpenTemperature = { navController.navigate("temperature") },
+                            onOpenModels = { navController.navigate("models") }
                         )
                     }
                     composable("settings") {
@@ -37,6 +39,9 @@ class MainActivity : AppCompatActivity() {
                     }
                     composable("temperature") {
                         TemperatureScreen(onNavigateBack = { navController.popBackStack() })
+                    }
+                    composable("models") {
+                        ModelsScreen(onNavigateBack = { navController.popBackStack() })
                     }
                 }
             }

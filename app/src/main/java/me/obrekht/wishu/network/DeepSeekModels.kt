@@ -10,6 +10,9 @@ data class ChatRequest(
     @SerialName("max_tokens") val maxTokens: Int,
     val temperature: Double = 0.9,
     val stop: List<String>? = null,
+    // V4 thinking-mode knob: only "high" and "max" differ ("low"/"medium" map to "high",
+    // "xhigh" maps to "max"). Controls how much the model "thinks" before answering.
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val stream: Boolean? = null,
     // For stream=true: ask the gateway to emit a final usage-only chunk so we can report token cost.
     @SerialName("stream_options") val streamOptions: StreamOptions? = null

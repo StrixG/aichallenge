@@ -248,8 +248,9 @@ private fun MethodCard(
 
 // Collapsible chain-of-thought. Closed by default; while the model is still thinking (no answer
 // yet) the header pulses with animated dots. Tap to reveal the reasoning text.
+// Shared with the models-comparison screen.
 @Composable
-private fun ReasoningSection(reasoning: String, thinking: Boolean) {
+internal fun ReasoningSection(reasoning: String, thinking: Boolean) {
     if (reasoning.isBlank() && !thinking) return
     var expanded by remember { mutableStateOf(false) }
     Spacer(Modifier.size(8.dp))
