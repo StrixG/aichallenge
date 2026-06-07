@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -75,7 +76,11 @@ import me.obrekht.wishu.data.Wish
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel = viewModel()) {
+fun WishlistScreen(
+    onOpenSettings: () -> Unit = {},
+    onOpenReasoning: () -> Unit = {},
+    viewModel: WishlistViewModel = viewModel()
+) {
     val uiState by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -126,6 +131,9 @@ fun WishlistScreen(onOpenSettings: () -> Unit = {}, viewModel: WishlistViewModel
                         }
                     }
                     Spacer(Modifier.width(4.dp))
+                    IconButton(onClick = onOpenReasoning) {
+                        Icon(Icons.Rounded.Psychology, contentDescription = "Способы рассуждения")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.cd_settings))
                     }

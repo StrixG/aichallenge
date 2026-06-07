@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import me.obrekht.wishu.ui.ReasoningScreen
 import me.obrekht.wishu.ui.SettingsScreen
 import me.obrekht.wishu.ui.WishuTheme
 import me.obrekht.wishu.ui.WishlistScreen
@@ -21,10 +22,16 @@ class MainActivity : AppCompatActivity() {
                 val navController = rememberNavController()
                 NavHost(navController = navController, startDestination = "wishlist") {
                     composable("wishlist") {
-                        WishlistScreen(onOpenSettings = { navController.navigate("settings") })
+                        WishlistScreen(
+                            onOpenSettings = { navController.navigate("settings") },
+                            onOpenReasoning = { navController.navigate("reasoning") }
+                        )
                     }
                     composable("settings") {
                         SettingsScreen(onNavigateBack = { navController.popBackStack() })
+                    }
+                    composable("reasoning") {
+                        ReasoningScreen(onNavigateBack = { navController.popBackStack() })
                     }
                 }
             }
