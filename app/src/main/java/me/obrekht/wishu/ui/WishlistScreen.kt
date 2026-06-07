@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Thermostat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
@@ -79,6 +80,7 @@ import me.obrekht.wishu.data.Wish
 fun WishlistScreen(
     onOpenSettings: () -> Unit = {},
     onOpenReasoning: () -> Unit = {},
+    onOpenTemperature: () -> Unit = {},
     viewModel: WishlistViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -133,6 +135,9 @@ fun WishlistScreen(
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = onOpenReasoning) {
                         Icon(Icons.Rounded.Psychology, contentDescription = "Способы рассуждения")
+                    }
+                    IconButton(onClick = onOpenTemperature) {
+                        Icon(Icons.Rounded.Thermostat, contentDescription = "Температура")
                     }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.cd_settings))
