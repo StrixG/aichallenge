@@ -10,7 +10,22 @@ data class ChatRequest(
     @SerialName("max_tokens") val maxTokens: Int,
     val temperature: Double = 0.9,
     val stop: List<String>? = null,
-    val stream: Boolean? = null
+    val stream: Boolean? = null,
+    // For stream=true: ask the gateway to emit a final usage-only chunk so we can report token cost.
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null
+)
+
+@Serializable
+data class StreamOptions(
+    @SerialName("include_usage") val includeUsage: Boolean = true
+)
+
+// Token accounting returned by the API (final chunk when streaming, top-level when not).
+@Serializable
+data class Usage(
+    @SerialName("prompt_tokens") val promptTokens: Int = 0,
+    @SerialName("completion_tokens") val completionTokens: Int = 0,
+    @SerialName("total_tokens") val totalTokens: Int = 0
 )
 
 @Serializable
@@ -29,10 +44,12 @@ data class Choice(
     val message: ChatMessage
 )
 
-// Server-sent-events shape for stream=true: each chunk carries an incremental delta.
+// Server-sent-events shape for stream=true: each chunk carries an incremental delta. The final
+// usage-only chunk (when stream_options.include_usage=true) has empty choices and a populated usage.
 @Serializable
 data class StreamChunk(
-    val choices: List<StreamChoice>
+    val choices: List<StreamChoice> = emptyList(),
+    val usage: Usage? = null
 )
 
 @Serializable
