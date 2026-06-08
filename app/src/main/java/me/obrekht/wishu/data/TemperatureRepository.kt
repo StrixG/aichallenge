@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import me.obrekht.wishu.network.ChatMessage
 import me.obrekht.wishu.network.ChatRequest
 import me.obrekht.wishu.network.StreamChunk
+import me.obrekht.wishu.network.Thinking
 import me.obrekht.wishu.network.StreamOptions
 import me.obrekht.wishu.network.Usage
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,7 +65,9 @@ class TemperatureRepository(
             maxTokens = maxTokens,
             temperature = temperature,
             stream = true,
-            streamOptions = StreamOptions(includeUsage = true)
+            streamOptions = StreamOptions(includeUsage = true),
+            // Thinking off so `temperature` is honored — comparing temps is the whole point here.
+            thinking = Thinking(type = "disabled")
         )
         val request = Request.Builder()
             .url(ENDPOINT)

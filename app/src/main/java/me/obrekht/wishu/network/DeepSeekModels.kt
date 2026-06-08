@@ -15,7 +15,16 @@ data class ChatRequest(
     @SerialName("reasoning_effort") val reasoningEffort: String? = null,
     val stream: Boolean? = null,
     // For stream=true: ask the gateway to emit a final usage-only chunk so we can report token cost.
-    @SerialName("stream_options") val streamOptions: StreamOptions? = null
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null,
+    // Hybrid V4 models default to thinking ("enabled"), and in thinking mode the API IGNORES
+    // `temperature`. Pass type="disabled" to turn the chain-of-thought off so temperature takes effect.
+    val thinking: Thinking? = null
+)
+
+// Sole field is `type`: "enabled" (default) | "disabled".
+@Serializable
+data class Thinking(
+    val type: String
 )
 
 @Serializable
