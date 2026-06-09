@@ -57,6 +57,10 @@ class WishuApplication : Application() {
             .build()
     }
 
+    // No BODY logging: a network-level body-logging interceptor buffers the whole
+    // response, which would defeat token-by-token SSE streaming. Keeps auth + retry + timeouts.
+    val streamingHttpClient: OkHttpClient by lazy { baseClientBuilder().build() }
+
     val deepSeekApi: DeepSeekApi by lazy {
         val json = Json {
             ignoreUnknownKeys = true

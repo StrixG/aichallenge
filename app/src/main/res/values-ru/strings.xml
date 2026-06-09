@@ -2,16 +2,17 @@
 <resources>
     <string name="app_name">Wishu</string>
     <string name="wishlist_title">Мой список желаний</string>
-    <string name="cd_generate_wish">Генерировать идею желания</string>
+    <string name="cd_open_chat">Придумать идеи с ИИ</string>
     <string name="hint_add_wish">Добавить желание…</string>
     <string name="cd_add_wish">Добавить желание</string>
     <string name="cd_delete_wish">Удалить желание</string>
     <string name="empty_wishlist">Желаний пока нет. Добавьте первое!</string>
-    <string name="error_generate_idea">Не удалось сгенерировать идею</string>
-    <string name="prompt_generate_wish">Предложи мне несколько идей для списка желаний.</string>
-    <string name="suggestions_title">Выберите желания для добавления</string>
-    <string name="suggestions_add">Добавить выбранные</string>
-    <string name="suggestions_cancel">Отмена</string>
+    <string name="chat_title">ИИ-чат</string>
+    <string name="hint_chat">Спросите про идеи подарков…</string>
+    <string name="cd_send">Отправить</string>
+    <string name="cd_add_to_wishlist">Добавить в список</string>
+    <string name="chat_empty">Попросите меня придумать идеи для списка желаний или подарков!</string>
+    <string name="error_chat">Не удалось связаться с ассистентом</string>
     <string name="cd_settings">Настройки</string>
     <string name="settings_title">Настройки</string>
     <string name="cd_navigate_back">Назад</string>

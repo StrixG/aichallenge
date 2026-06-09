@@ -7,6 +7,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import me.obrekht.wishu.ui.ChatScreen
 import me.obrekht.wishu.ui.SettingsScreen
 import me.obrekht.wishu.ui.WishuTheme
 import me.obrekht.wishu.ui.WishlistScreen
@@ -22,8 +23,12 @@ class MainActivity : AppCompatActivity() {
                 NavHost(navController = navController, startDestination = "wishlist") {
                     composable("wishlist") {
                         WishlistScreen(
-                            onOpenSettings = { navController.navigate("settings") }
+                            onOpenSettings = { navController.navigate("settings") },
+                            onOpenChat = { navController.navigate("chat") }
                         )
+                    }
+                    composable("chat") {
+                        ChatScreen(onNavigateBack = { navController.popBackStack() })
                     }
                     composable("settings") {
                         SettingsScreen(onNavigateBack = { navController.popBackStack() })

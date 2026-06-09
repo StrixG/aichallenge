@@ -1,16 +1,7 @@
 package me.obrekht.wishu.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,15 +15,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -42,27 +30,22 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -74,6 +57,7 @@ import me.obrekht.wishu.data.Wish
 @Composable
 fun WishlistScreen(
     onOpenSettings: () -> Unit = {},
+    onOpenChat: () -> Unit = {},
     viewModel: WishlistViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -92,37 +76,11 @@ fun WishlistScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.wishlist_title)) },
                 actions = {
-                    val busy = uiState.isGenerating
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .clickable(
-                                enabled = !busy,
-                                onClick = { viewModel.generateWishIdea() }
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AnimatedContent(
-                            targetState = busy,
-                            transitionSpec = {
-                                (fadeIn() + scaleIn(initialScale = 0.6f)) togetherWith
-                                    (fadeOut() + scaleOut(targetScale = 0.6f))
-                            },
-                            label = "generate"
-                        ) { isBusy ->
-                            if (isBusy) {
-                                LoadingIndicator(color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            } else {
-                                Icon(
-                                    Icons.Rounded.AutoAwesome,
-                                    contentDescription = stringResource(R.string.cd_generate_wish),
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
+                    FilledIconButton(onClick = onOpenChat) {
+                        Icon(
+                            Icons.Rounded.AutoAwesome,
+                            contentDescription = stringResource(R.string.cd_open_chat)
+                        )
                     }
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = onOpenSettings) {
@@ -167,13 +125,6 @@ fun WishlistScreen(
             }
         }
     ) { padding ->
-        if (uiState.suggestions.isNotEmpty()) {
-            SuggestionsDialog(
-                suggestions = uiState.suggestions,
-                onAdd = { viewModel.addSuggestions(it) },
-                onDismiss = { viewModel.dismissSuggestions() }
-            )
-        }
         if (uiState.wishes.isEmpty()) {
             Column(
                 modifier = Modifier
@@ -213,57 +164,6 @@ fun WishlistScreen(
             }
         }
     }
-}
-
-@Composable
-private fun SuggestionsDialog(
-    suggestions: List<String>,
-    onAdd: (List<String>) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val selected = remember(suggestions) { mutableStateListOf(*suggestions.toTypedArray()) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.suggestions_title)) },
-        text = {
-            Column {
-                suggestions.forEach { suggestion ->
-                    val isChecked = suggestion in selected
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (isChecked) selected.remove(suggestion) else selected.add(suggestion)
-                            }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(
-                            checked = isChecked,
-                            onCheckedChange = {
-                                if (it) selected.add(suggestion) else selected.remove(suggestion)
-                            }
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(suggestion, style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onAdd(selected.toList()) },
-                enabled = selected.isNotEmpty()
-            ) {
-                Text(stringResource(R.string.suggestions_add))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.suggestions_cancel))
-            }
-        }
-    )
 }
 
 @Composable

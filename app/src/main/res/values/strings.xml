@@ -2,16 +2,17 @@
 <resources>
     <string name="app_name">Wishu</string>
     <string name="wishlist_title">My Wishlist</string>
-    <string name="cd_generate_wish">Generate wish idea</string>
+    <string name="cd_open_chat">Brainstorm ideas with AI</string>
     <string name="hint_add_wish">Add a wish…</string>
     <string name="cd_add_wish">Add wish</string>
     <string name="cd_delete_wish">Delete wish</string>
     <string name="empty_wishlist">No wishes yet. Add one below!</string>
-    <string name="error_generate_idea">Failed to generate idea</string>
-    <string name="prompt_generate_wish">Suggest some wishlist ideas for me.</string>
-    <string name="suggestions_title">Pick wishes to add</string>
-    <string name="suggestions_add">Add selected</string>
-    <string name="suggestions_cancel">Cancel</string>
+    <string name="chat_title">AI Chat</string>
+    <string name="hint_chat">Ask for gift ideas…</string>
+    <string name="cd_send">Send</string>
+    <string name="cd_add_to_wishlist">Add to wishlist</string>
+    <string name="chat_empty">Ask me to brainstorm wishlist or gift ideas!</string>
+    <string name="error_chat">Failed to reach the assistant</string>
     <string name="cd_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="cd_navigate_back">Navigate back</string>
