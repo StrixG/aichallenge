@@ -14,7 +14,9 @@ import me.obrekht.wishu.WishuApplication
 import me.obrekht.wishu.agent.WishChatAgent
 import me.obrekht.wishu.agent.parseWishItems
 import me.obrekht.wishu.agent.stripWishItems
+import me.obrekht.wishu.data.ChatHistoryRepository
 import me.obrekht.wishu.data.WishRepository
+import me.obrekht.wishu.network.ChatMessage
 
 data class ChatUiMessage(
     val role: String, // "user" | "assistant"
@@ -34,10 +36,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as WishuApplication
     private val agent = WishChatAgent(app.streamingHttpClient)
     private val wishRepository = WishRepository(app.database.wishDao(), app.deepSeekApi)
+    private val chatHistoryRepository = ChatHistoryRepository(app.database.chatMessageDao())
     private val settingsRepository = app.settingsRepository
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    init {
+        // Restore the saved transcript: re-seed the agent (so DeepSeek gets full context again)
+        // and rebuild the on-screen bubbles as if the agent never stopped.
+        viewModelScope.launch {
+            val saved = chatHistoryRepository.load()
+            if (saved.isEmpty()) return@launch
+            agent.restore(saved)
+            _uiState.update { it.copy(messages = saved.map(::toUiMessage)) }
+        }
+    }
 
     fun onInputChange(value: TextFieldValue) {
         _uiState.update { it.copy(inputText = value) }
@@ -64,6 +78,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 agent.send(text, model).collect { delta ->
                     _uiState.update { state -> state.copy(messages = appendToLast(state.messages, delta)) }
                 }
+                val rawReply = _uiState.value.messages.last().content
                 _uiState.update { state ->
                     val last = state.messages.last()
                     val items = parseWishItems(last.content)
@@ -75,6 +90,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isStreaming = false
                     )
                 }
+                // Persist the completed turn. Store the raw assistant content (with bullets) so
+                // parseWishItems works again on restore, exactly like a fresh stream.
+                chatHistoryRepository.append("user", text)
+                chatHistoryRepository.append("assistant", rawReply)
             } catch (e: Exception) {
                 // Drop the empty assistant placeholder and surface the error.
                 _uiState.update { state ->
@@ -94,6 +113,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    // Rebuild a UI bubble from a stored turn. Assistant bullet lines become add buttons again
+    // (same parse/strip as the live post-stream path); user turns pass through unchanged.
+    private fun toUiMessage(message: ChatMessage): ChatUiMessage {
+        if (message.role != "assistant") {
+            return ChatUiMessage(role = message.role, content = message.content)
+        }
+        val items = parseWishItems(message.content)
+        val display = if (items.isEmpty()) message.content else stripWishItems(message.content)
+        return ChatUiMessage(role = "assistant", content = display, items = items)
     }
 
     private fun appendToLast(messages: List<ChatUiMessage>, delta: String): List<ChatUiMessage> {

@@ -25,8 +25,9 @@ const val CHAT_SYSTEM_PROMPT =
 
 /**
  * The agent: owns the multi-turn conversation history and the DeepSeek request/response logic.
- * Callers only see [send] / [transcript] — they never build a [ChatRequest] themselves.
- * History lives in memory only (no persistence); a new agent starts a fresh conversation.
+ * Callers only see [send] / [transcript] / [restore] — they never build a [ChatRequest] themselves.
+ * History lives in memory; [restore] re-seeds prior turns loaded from storage so context survives
+ * an app restart.
  */
 class WishChatAgent(
     private val client: OkHttpClient,
@@ -42,6 +43,11 @@ class WishChatAgent(
 
     // User/assistant turns only (the system prompt stays hidden from the UI).
     val transcript: List<ChatMessage> get() = history.drop(1)
+
+    /** Re-seed prior user/assistant turns from storage (the system prompt stays at history[0]). */
+    fun restore(messages: List<ChatMessage>) {
+        history.addAll(messages)
+    }
 
     /**
      * Appends the user turn, streams the assistant reply token-by-token (one emit per delta),
