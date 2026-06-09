@@ -18,8 +18,6 @@ data class WishlistUiState(
     val inputText: TextFieldValue = TextFieldValue(),
     val isGenerating: Boolean = false,
     val suggestions: List<String> = emptyList(),
-    val isGeneratingUnconstrained: Boolean = false,
-    val unconstrainedResult: String? = null,
     val errorMessage: String? = null
 )
 
@@ -84,27 +82,6 @@ class WishlistViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissSuggestions() {
         _uiState.update { it.copy(suggestions = emptyList()) }
-    }
-
-    fun generateUnconstrained() {
-        if (_uiState.value.isGeneratingUnconstrained) return
-        viewModelScope.launch {
-            _uiState.update { it.copy(isGeneratingUnconstrained = true, errorMessage = null) }
-            try {
-                val model = settingsRepository.selectedModel.value
-                val result = repository.generateUnconstrained(
-                    app.getString(me.obrekht.wishu.R.string.prompt_generate_wish),
-                    model
-                )
-                _uiState.update { it.copy(unconstrainedResult = result, isGeneratingUnconstrained = false) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isGeneratingUnconstrained = false, errorMessage = app.getString(me.obrekht.wishu.R.string.error_generate_idea)) }
-            }
-        }
-    }
-
-    fun dismissUnconstrained() {
-        _uiState.update { it.copy(unconstrainedResult = null) }
     }
 
     fun clearError() {

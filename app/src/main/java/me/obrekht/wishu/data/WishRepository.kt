@@ -19,8 +19,7 @@ class WishRepository(
         wishDao.delete(wish)
     }
 
-    // Constrained: (1) explicit format, (2) length limit (max_tokens + per-item word cap),
-    // (3) completion condition (stop param + explicit instruction).
+    // System prompt forces exactly 3 short items; max_tokens + stop bound length and completion.
     suspend fun generateWishIdeas(prompt: String, model: String): List<String> {
         val request = ChatRequest(
             model = model,
@@ -43,15 +42,5 @@ class WishRepository(
             .map { it.trim().removePrefix("-").removePrefix("•").trim().trimStart('1', '2', '3', '.', ')', ' ').trim() }
             .filter { it.isNotBlank() }
             .take(3)
-    }
-
-    // Unconstrained: bare user prompt, generous budget, no format/length/stop controls.
-    suspend fun generateUnconstrained(prompt: String, model: String): String {
-        val request = ChatRequest(
-            model = model,
-            messages = listOf(ChatMessage(role = "user", content = prompt)),
-            maxTokens = 2000
-        )
-        return deepSeekApi.chatCompletions(request).choices.first().message.content.trim()
     }
 }

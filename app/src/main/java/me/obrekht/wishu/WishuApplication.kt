@@ -44,27 +44,13 @@ class WishuApplication : Application() {
                 )
             }
 
-    // Default client: BODY logging. Used by Retrofit (short, non-streamed wishlist calls).
+    // BODY logging in debug. Used by Retrofit for the short wishlist calls.
     val httpClient: OkHttpClient by lazy {
         baseClientBuilder()
             .apply {
                 if (BuildConfig.DEBUG) {
                     addNetworkInterceptor(
                         HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
-                    )
-                }
-            }
-            .build()
-    }
-
-    // Streaming client: HEADERS-only logging. A BODY logger buffers the whole SSE response before
-    // returning it, which destroys real-time token streaming; HEADERS logging leaves the stream intact.
-    val streamingHttpClient: OkHttpClient by lazy {
-        baseClientBuilder()
-            .apply {
-                if (BuildConfig.DEBUG) {
-                    addNetworkInterceptor(
-                        HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.HEADERS }
                     )
                 }
             }

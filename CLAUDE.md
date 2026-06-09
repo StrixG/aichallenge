@@ -31,14 +31,9 @@ Manual DI, no Hilt/Koin. `WishuApplication` owns lazy singletons: `database`, `s
 
 Navigation: two Compose destinations (`wishlist`, `settings`) in a `NavHost` in `MainActivity` (an `AppCompatActivity`, required for per-app locales).
 
-### The AI core — constrained vs unconstrained generation
+### The AI core — idea generation
 
-`WishRepository` is the heart of the learning project. It deliberately contrasts two prompting styles against the same DeepSeek `chat/completions` endpoint:
-
-- `generateWishIdeas` — **constrained**: system prompt forces exactly 3 short items, `maxTokens=300`, `stop=["END"]`, plus client-side line parsing/cleanup. Demonstrates format + length + completion control.
-- `generateUnconstrained` — **unconstrained**: bare user prompt, `maxTokens=2000`, no format/stop controls.
-
-When changing generation behavior, preserve this contrast — it is the point of the project. Keep the explanatory comments above each method.
+`WishRepository.generateWishIdeas` is the single generation path against the DeepSeek `chat/completions` endpoint: a system prompt forces exactly 3 short items, `maxTokens=300`, `stop=["END"]`, plus client-side line parsing/cleanup (format + length + completion control).
 
 The generation prompt comes from a **string resource** (`R.string.prompt_generate_wish`), and the system prompt instructs the model to "respond in the same language as the user's message" — so AI output follows the app locale. Errors surface as `R.string.error_generate_idea` in `uiState.errorMessage`.
 
