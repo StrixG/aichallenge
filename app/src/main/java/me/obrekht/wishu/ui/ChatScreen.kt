@@ -21,9 +21,13 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
@@ -45,10 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.obrekht.wishu.R
+import me.obrekht.wishu.agent.TurnTokens
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -77,17 +84,69 @@ fun ChatScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.chat_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = stringResource(R.string.cd_navigate_back)
-                        )
+            Column {
+                TopAppBar(
+                    title = { Text(stringResource(R.string.chat_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = stringResource(R.string.cd_navigate_back)
+                            )
+                        }
+                    },
+                    actions = {
+                        // Demo: force the real context-window overflow without pasting a novel.
+                        IconButton(
+                            onClick = { viewModel.simulateOverflow() },
+                            enabled = !uiState.isStreaming
+                        ) {
+                            Icon(
+                                Icons.Rounded.Science,
+                                contentDescription = stringResource(R.string.cd_simulate_overflow)
+                            )
+                        }
+                        IconButton(
+                            onClick = { viewModel.clearSession() },
+                            enabled = uiState.messages.isNotEmpty() && !uiState.isStreaming
+                        ) {
+                            Icon(
+                                Icons.Rounded.DeleteSweep,
+                                contentDescription = stringResource(R.string.cd_clear_session)
+                            )
+                        }
+                    }
+                )
+                // Cumulative token + cost meter for the session (driven by the latest turn).
+                uiState.tokenTurns.lastOrNull()?.let { total ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.DataUsage,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.token_cumulative,
+                                    total.cumulativeTotal,
+                                    usd(total.cumulativeCostUsd)
+                                ),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
-            )
+            }
         },
         bottomBar = {
             Surface(
@@ -164,7 +223,11 @@ fun ChatScreen(
                     if (message.role == "user") {
                         UserBubble(message.content)
                     } else {
-                        AssistantBubble(message, onAddItem = { viewModel.addItem(it) })
+                        AssistantBubble(
+                            message = message,
+                            tokens = message.tokens,
+                            onAddItem = { viewModel.addItem(it) }
+                        )
                     }
                 }
             }
@@ -190,9 +253,16 @@ private fun UserBubble(text: String) {
     }
 }
 
+// Cost is a fraction of a cent per turn; show enough decimals to see it move.
+private fun usd(value: Double): String = String.format(Locale.US, "%.5f", value)
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun AssistantBubble(message: ChatUiMessage, onAddItem: (String) -> Unit) {
+private fun AssistantBubble(
+    message: ChatUiMessage,
+    tokens: TurnTokens?,
+    onAddItem: (String) -> Unit
+) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Surface(
             color = MaterialTheme.colorScheme.surfaceVariant,
@@ -205,6 +275,28 @@ private fun AssistantBubble(message: ChatUiMessage, onAddItem: (String) -> Unit)
                     LoadingIndicator(color = MaterialTheme.colorScheme.primary)
                 } else if (message.content.isNotBlank()) {
                     Text(text = message.content, style = MaterialTheme.typography.bodyLarge)
+                }
+                // Per-turn accounting: DeepSeek's exact token counts for this turn.
+                tokens?.let {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(top = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.token_turn,
+                            it.promptActual,
+                            it.cacheHitActual,
+                            it.cacheMissActual,
+                            it.completionActual,
+                            it.totalActual,
+                            usd(it.turnCostUsd)
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
                 }
                 message.items.forEachIndexed { index, item ->
                     // Each suggestion sits on its own card so it stands out from the bubble.

@@ -11,6 +11,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import me.obrekht.wishu.R
 import me.obrekht.wishu.WishuApplication
+import me.obrekht.wishu.agent.ChatEvent
+import me.obrekht.wishu.agent.ContextWindowExceededException
+import me.obrekht.wishu.agent.TurnTokens
 import me.obrekht.wishu.agent.WishChatAgent
 import me.obrekht.wishu.agent.parseWishItems
 import me.obrekht.wishu.agent.stripWishItems
@@ -21,14 +24,18 @@ import me.obrekht.wishu.network.ChatMessage
 data class ChatUiMessage(
     val role: String, // "user" | "assistant"
     val content: String,
-    val items: List<String> = emptyList()
+    val items: List<String> = emptyList(),
+    // Token accounting for this assistant turn (null for user turns / restored bubbles).
+    val tokens: TurnTokens? = null
 )
 
 data class ChatUiState(
     val messages: List<ChatUiMessage> = emptyList(),
     val inputText: TextFieldValue = TextFieldValue(),
     val isStreaming: Boolean = false,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    // Per-turn token accounting; the last entry carries the cumulative totals/cost.
+    val tokenTurns: List<TurnTokens> = emptyList()
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -60,13 +67,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun send() {
         val text = _uiState.value.inputText.text.trim()
         if (text.isBlank() || _uiState.value.isStreaming) return
+        _uiState.update { it.copy(inputText = TextFieldValue()) }
+        // On failure restore the typed text so the user can retry.
+        dispatch(displayText = text, payloadText = text, restoreOnError = text)
+    }
 
+    /**
+     * Demo: fire a turn whose payload is a multi-megabyte dummy string — far past the model's real
+     * ~1M-token context window — so DeepSeek rejects it and the distinct overflow error shows
+     * without anyone pasting a novel. The bubble shows a short label, not the giant payload.
+     */
+    fun simulateOverflow() {
+        if (_uiState.value.isStreaming) return
+        val dummy = "lorem ipsum dolor sit amet ".repeat(200_000) // ~5.4M chars ≈ 1.35M tokens
+        dispatch(displayText = OVERFLOW_LABEL, payloadText = dummy, restoreOnError = null)
+    }
+
+    /**
+     * Append the user/assistant bubbles, stream the reply, and handle completion/errors.
+     * [displayText] is what the user bubble shows; [payloadText] is what's actually sent (they
+     * differ only for [simulateOverflow]). On failure [restoreOnError], if non-null, is put back
+     * in the input box.
+     */
+    private fun dispatch(displayText: String, payloadText: String, restoreOnError: String?) {
         _uiState.update {
             it.copy(
                 messages = it.messages +
-                    ChatUiMessage(role = "user", content = text) +
+                    ChatUiMessage(role = "user", content = displayText) +
                     ChatUiMessage(role = "assistant", content = ""),
-                inputText = TextFieldValue(),
                 isStreaming = true,
                 errorMessage = null
             )
@@ -75,8 +103,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val model = settingsRepository.selectedModel.value
-                agent.send(text, model).collect { delta ->
-                    _uiState.update { state -> state.copy(messages = appendToLast(state.messages, delta)) }
+                agent.send(payloadText, model).collect { event ->
+                    when (event) {
+                        is ChatEvent.Token -> _uiState.update { state ->
+                            state.copy(messages = appendToLast(state.messages, event.delta))
+                        }
+                        is ChatEvent.Complete -> _uiState.update { state ->
+                            // Attach to the streaming assistant bubble; keep the list for the
+                            // session-cumulative meter (its last entry holds the running totals).
+                            val last = state.messages.last()
+                            state.copy(
+                                messages = state.messages.dropLast(1) +
+                                    last.copy(tokens = event.tokens),
+                                tokenTurns = state.tokenTurns + event.tokens
+                            )
+                        }
+                    }
                 }
                 val rawReply = _uiState.value.messages.last().content
                 _uiState.update { state ->
@@ -92,13 +134,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Persist the completed turn. Store the raw assistant content (with bullets) so
                 // parseWishItems works again on restore, exactly like a fresh stream.
-                chatHistoryRepository.append("user", text)
+                chatHistoryRepository.append("user", displayText)
                 chatHistoryRepository.append("assistant", rawReply)
-            } catch (e: Exception) {
-                // Drop the empty assistant placeholder and surface the error.
+            } catch (e: ContextWindowExceededException) {
+                // The model's real context window overflowed. The agent didn't commit the turn,
+                // so drop both bubbles, optionally restore the input, and show the distinct error.
                 _uiState.update { state ->
                     state.copy(
-                        messages = state.messages.dropLast(1),
+                        messages = state.messages.dropLast(2),
+                        inputText = restoreOnError?.let { TextFieldValue(it) } ?: state.inputText,
+                        isStreaming = false,
+                        errorMessage = app.getString(R.string.error_context_window)
+                    )
+                }
+            } catch (e: Exception) {
+                // Send failed (network, etc.); the agent didn't commit the turn. Drop both
+                // bubbles, optionally restore the input, and surface the error.
+                _uiState.update { state ->
+                    state.copy(
+                        messages = state.messages.dropLast(2),
+                        inputText = restoreOnError?.let { TextFieldValue(it) } ?: state.inputText,
                         isStreaming = false,
                         errorMessage = app.getString(R.string.error_chat)
                     )
@@ -109,6 +164,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addItem(text: String) {
         viewModelScope.launch { wishRepository.addWish(text) }
+    }
+
+    /** Wipe the whole session: on-screen bubbles, persisted history, agent context + token ledger. */
+    fun clearSession() {
+        if (_uiState.value.isStreaming) return
+        viewModelScope.launch {
+            agent.reset()
+            chatHistoryRepository.clear()
+            _uiState.value = ChatUiState()
+        }
     }
 
     fun clearError() {
@@ -129,5 +194,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun appendToLast(messages: List<ChatUiMessage>, delta: String): List<ChatUiMessage> {
         val last = messages.last()
         return messages.dropLast(1) + last.copy(content = last.content + delta)
+    }
+
+    private companion object {
+        const val OVERFLOW_LABEL = "⚠️ Simulating context overflow…"
     }
 }

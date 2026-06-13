@@ -11,8 +11,13 @@
     <string name="hint_chat">Ask for gift ideas…</string>
     <string name="cd_send">Send</string>
     <string name="cd_add_to_wishlist">Add to wishlist</string>
+    <string name="cd_clear_session">Clear session</string>
+    <string name="cd_simulate_overflow">Simulate context overflow</string>
     <string name="chat_empty">Ask me to brainstorm wishlist or gift ideas!</string>
     <string name="error_chat">Failed to reach the assistant</string>
+    <string name="error_context_window">Context window full: the conversation exceeds the model\'s limit. Clear the session to continue.</string>
+    <string name="token_turn">prompt %1$d (hit %2$d / miss %3$d) · reply %4$d · total %5$d · $%6$s</string>
+    <string name="token_cumulative">Σ %1$d tokens this session · $%2$s</string>
     <string name="cd_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="cd_navigate_back">Navigate back</string>

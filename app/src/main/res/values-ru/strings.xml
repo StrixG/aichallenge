@@ -11,8 +11,13 @@
     <string name="hint_chat">Спросите про идеи подарков…</string>
     <string name="cd_send">Отправить</string>
     <string name="cd_add_to_wishlist">Добавить в список</string>
+    <string name="cd_clear_session">Очистить сессию</string>
+    <string name="cd_simulate_overflow">Смоделировать переполнение контекста</string>
     <string name="chat_empty">Попросите меня придумать идеи для списка желаний или подарков!</string>
     <string name="error_chat">Не удалось связаться с ассистентом</string>
+    <string name="error_context_window">Контекстное окно заполнено: переписка превышает лимит модели. Очистите сессию, чтобы продолжить.</string>
+    <string name="token_turn">промпт %1$d (кэш %2$d / новых %3$d) · ответ %4$d · всего %5$d · $%6$s</string>
+    <string name="token_cumulative">Σ %1$d токенов за сессию · $%2$s</string>
     <string name="cd_settings">Настройки</string>
     <string name="settings_title">Настройки</string>
     <string name="cd_navigate_back">Назад</string>
