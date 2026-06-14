@@ -5,6 +5,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.obrekht.wishu.network.ApiErrorEnvelope
 import me.obrekht.wishu.network.ChatMessage
 import me.obrekht.wishu.network.ChatRequest
@@ -25,8 +29,8 @@ const val CHAT_SYSTEM_PROMPT =
         "wishlist and gift ideas through natural conversation. Keep replies concise. " +
         "Always reply in the same language as the user's most recent message."
 
-// Compression is always summarized by the cheap flash model — the work is easy and this keeps the
-// overhead tiny next to the savings on the main chat prompt.
+// Both helper calls (Summary fold, Sticky Facts refresh) use the cheap flash model — the work is
+// easy and this keeps the overhead tiny next to the savings/value on the main chat prompt.
 const val SUMMARY_MODEL = "deepseek-v4-flash"
 
 private const val SUMMARY_SYSTEM_PROMPT =
@@ -36,23 +40,35 @@ private const val SUMMARY_SYSTEM_PROMPT =
         "and concrete items already proposed. Be terse and factual, no preamble. " +
         "Output only the summary text, in the language the conversation uses."
 
-// Keep the last 6 raw messages (3 exchanges) verbatim; once the un-folded tail grows past 10
-// messages, fold the oldest down into the running summary.
+private const val FACTS_SYSTEM_PROMPT =
+    "You maintain a compact key-value memory of a wishlist brainstorming chat. Given the current " +
+        "facts (a JSON object) and the latest user/assistant exchange, output the UPDATED facts as " +
+        "a single JSON object mapping short snake_case keys to short string values. Capture durable " +
+        "facts only: recipient, occasion, budget, stated likes, dislikes, constraints, and decisions " +
+        "already made. Keep at most ~12 keys; keep everything still relevant. " +
+        "Output ONLY the JSON object — no prose, no code fences."
+
+// Summary: keep the last KEEP_RECENT raw turns verbatim; once the un-folded tail grows past
+// FOLD_THRESHOLD, fold the oldest into the running summary. Sliding Window / Sticky Facts send the
+// last WINDOW messages.
 private const val KEEP_RECENT = 6
 private const val FOLD_THRESHOLD = 10
+private const val WINDOW = KEEP_RECENT
 
 /**
- * The agent: owns the multi-turn conversation and the DeepSeek request/response logic.
- * Callers only see [send] / [restore] / [reset] — they never build a [ChatRequest] themselves.
+ * The agent: owns the active conversation transcript and the DeepSeek request/response logic.
+ * Callers only see [send] / [restore] / [loadHistory] / [reset] — never a [ChatRequest].
  *
- * History compression: instead of re-sending the whole dialog every turn, the agent keeps only the
- * last [KEEP_RECENT] raw turns ([recent]) plus a running [summary] of everything folded away. When
- * compression is on and the raw tail grows past [FOLD_THRESHOLD], the oldest turns are summarized
- * (one cheap flash call) and dropped from [recent]. The request then carries `system + summary +
- * recent` instead of the full transcript, so the prompt stays bounded as the dialog grows.
+ * Context management is selected per call via [ContextStrategy], and the agent branches on it in a
+ * single `when` (no class hierarchy). It always retains the full active transcript in [history]; the
+ * strategies differ only in what slice (plus optional [summary] / [facts]) they put in the request:
+ *  - SLIDING_WINDOW: the last [WINDOW] messages.
+ *  - SUMMARY: a running summary of the older turns + the un-folded tail.
+ *  - STICKY_FACTS: a key-value facts block (refreshed each turn) + the last [WINDOW] messages.
+ *  - BRANCHING: the whole transcript (which branch you're on is the context lever, set by [loadHistory]).
  *
- * Everything lives in memory; [restore] re-seeds the summary + recent tail loaded from storage so
- * context survives an app restart.
+ * Everything lives in memory; [restore] / [loadHistory] re-seed it from storage so context survives
+ * an app restart and branch switches.
  */
 class WishChatAgent(
     private val client: OkHttpClient,
@@ -64,59 +80,80 @@ class WishChatAgent(
         explicitNulls = false
     }
 
-    // Recent raw user/assistant turns (no system prompt). The compressed working set.
-    private val recent = mutableListOf<ChatMessage>()
+    // The full active transcript (no system prompt). Every strategy derives its payload from this.
+    private val history = mutableListOf<ChatMessage>()
 
-    // Running summary of the folded-away older turns, and how many persisted full-log messages it
-    // already covers (so [restore] can split the saved transcript into folded + recent tail).
+    // SUMMARY: running summary of the folded-away older turns, and how many leading [history]
+    // messages it already covers.
     var summary: String? = null
         private set
     var summarizedCount: Int = 0
         private set
 
+    // STICKY_FACTS: key-value memory refreshed after each turn.
+    private val facts = linkedMapOf<String, String>()
+    val factsJson: String get() = JsonObject(facts.mapValues { JsonPrimitive(it.value) }).toString()
+
     // Running token accounting across the dialog (resets each session, like the conversation).
     val ledger = TokenLedger()
 
-    /** Re-seed the summary + recent tail from storage. */
-    fun restore(summary: String?, summarizedCount: Int, recentMessages: List<ChatMessage>) {
+    /** Re-seed the full session state from storage. */
+    fun restore(history: List<ChatMessage>, summary: String?, summarizedCount: Int, factsJson: String?) {
+        this.history.clear()
+        this.history.addAll(history)
         this.summary = summary
         this.summarizedCount = summarizedCount
-        recent.clear()
-        recent.addAll(recentMessages)
+        facts.clear()
+        factsJson?.let { facts.putAll(parseFacts(it)) }
     }
 
-    /** Wipe the conversation back to a fresh session: no summary, empty tail + ledger. */
+    /** Swap the active transcript (Branching: switching to another branch's line). */
+    fun loadHistory(history: List<ChatMessage>) {
+        this.history.clear()
+        this.history.addAll(history)
+    }
+
+    /** Wipe the conversation back to a fresh session. */
     fun reset() {
-        recent.clear()
+        history.clear()
         summary = null
         summarizedCount = 0
+        facts.clear()
         ledger.clear()
     }
 
     /**
      * Appends the user turn, streams the assistant reply ([ChatEvent.Token] per delta), then emits
-     * one [ChatEvent.Complete] with the turn's token accounting. When [compress] is on, older turns
-     * may be folded into [summary] after a successful reply.
+     * one [ChatEvent.Complete] with the turn's token accounting (and which helper call, if any, ran).
      */
     fun send(
         userMessage: String,
         model: String,
-        compress: Boolean
+        strategy: ContextStrategy
     ): Flow<ChatEvent> = flow {
         val userTurn = ChatMessage(role = "user", content = userMessage)
 
-        // The request carries the base prompt, the running summary (if any), the recent raw tail,
-        // and the new user turn. With compression off no fold ever runs, so `recent` is the whole
-        // dialog and this is the full transcript — the uncompressed baseline.
+        // Build the request body per strategy. The turn isn't committed to [history] until AFTER a
+        // successful reply, so a rejected request never leaves a dangling turn behind.
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
-            summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
-            addAll(recent)
+            when (strategy) {
+                ContextStrategy.SUMMARY -> {
+                    summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
+                    addAll(history.drop(summarizedCount))
+                }
+                ContextStrategy.SLIDING_WINDOW -> addAll(history.takeLast(WINDOW))
+                ContextStrategy.STICKY_FACTS -> {
+                    if (facts.isNotEmpty()) {
+                        add(ChatMessage(role = "system", content = factsContext()))
+                    }
+                    addAll(history.takeLast(WINDOW))
+                }
+                ContextStrategy.BRANCHING -> addAll(history)
+            }
             add(userTurn)
         }
 
-        // The turn is committed only AFTER a successful reply (below), so a rejected request —
-        // e.g. the real context window overflowing — never leaves a dangling turn behind.
         val payload = ChatRequest(
             model = model,
             messages = payloadMessages,
@@ -148,32 +185,130 @@ class WishChatAgent(
                 emit(ChatEvent.Token(delta))
             }
         }
-        recent.add(userTurn)
-        recent.add(ChatMessage(role = "assistant", content = full.toString()))
+        history.add(userTurn)
+        history.add(ChatMessage(role = "assistant", content = full.toString()))
 
-        // Fold older turns into the summary once the raw tail outgrows the window (compression on).
-        val summaryUsage = if (compress && recent.size > FOLD_THRESHOLD) foldOldest() else null
+        // The strategy's optional helper call, run only after a successful reply.
+        var auxKind = AuxKind.NONE
+        val auxUsage: Usage? = when (strategy) {
+            ContextStrategy.SUMMARY ->
+                foldOldest()?.also { auxKind = AuxKind.SUMMARY }
+            ContextStrategy.STICKY_FACTS ->
+                refreshFacts(userTurn.content, full.toString())?.also { auxKind = AuxKind.FACTS }
+            else -> null
+        }
 
         // Exact accounting from DeepSeek's usage chunk. With include_usage=true it's always present;
         // if it's somehow missing we just skip the token panel for this turn rather than guess.
         usage?.let {
-            emit(ChatEvent.Complete(ledger.record(model, it, summaryUsage), summarized = summaryUsage != null))
+            emit(ChatEvent.Complete(ledger.record(model, it, auxUsage), aux = auxKind))
         }
     }.flowOn(Dispatchers.IO)
 
-    // Fold the oldest (recent.size - KEEP_RECENT) turns into the running summary and drop them from
-    // the tail. Returns the summarization call's usage so the turn's accounting can include it.
+    /**
+     * Streams a new assistant reply for the last user turn already in [history] — used by the
+     * invisible-branching regenerate flow, where the caller has already forked to a fresh branch
+     * and loaded the transcript (ending with the user turn) via [loadHistory]. Unlike [send], this
+     * does not append a user turn; it only appends the assistant reply.
+     */
+    fun regenerate(model: String, strategy: ContextStrategy): Flow<ChatEvent> = flow {
+        val payloadMessages = buildList {
+            add(ChatMessage(role = "system", content = systemPrompt))
+            when (strategy) {
+                ContextStrategy.SUMMARY -> {
+                    summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
+                    addAll(history.drop(summarizedCount))
+                }
+                ContextStrategy.SLIDING_WINDOW -> addAll(history.takeLast(WINDOW))
+                ContextStrategy.STICKY_FACTS -> {
+                    if (facts.isNotEmpty()) {
+                        add(ChatMessage(role = "system", content = factsContext()))
+                    }
+                    addAll(history.takeLast(WINDOW))
+                }
+                ContextStrategy.BRANCHING -> addAll(history)
+            }
+            // No add(userTurn) — history already ends with the user turn to answer.
+        }
+
+        val payload = ChatRequest(
+            model = model,
+            messages = payloadMessages,
+            maxTokens = 8192,
+            stream = true,
+            streamOptions = StreamOptions(includeUsage = true)
+        )
+        val request = Request.Builder()
+            .url(ENDPOINT)
+            .post(json.encodeToString(payload).toRequestBody(JSON_MEDIA))
+            .build()
+
+        val full = StringBuilder()
+        var usage: Usage? = null
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
+            val source = response.body.source()
+            while (!source.exhausted()) {
+                val line = source.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val data = line.removePrefix("data:").trim()
+                if (data == "[DONE]") break
+                val chunk = json.decodeFromString<StreamChunk>(data)
+                chunk.usage?.let { usage = it }
+                val delta = chunk.choices.firstOrNull()?.delta?.content ?: continue
+                if (delta.isEmpty()) continue
+                full.append(delta)
+                emit(ChatEvent.Token(delta))
+            }
+        }
+        // Only the assistant turn is committed; the user turn is already in history.
+        history.add(ChatMessage(role = "assistant", content = full.toString()))
+
+        var auxKind = AuxKind.NONE
+        val auxUsage: Usage? = when (strategy) {
+            ContextStrategy.SUMMARY ->
+                foldOldest()?.also { auxKind = AuxKind.SUMMARY }
+            ContextStrategy.STICKY_FACTS ->
+                refreshFacts(history.dropLast(1).last().content, full.toString())
+                    ?.also { auxKind = AuxKind.FACTS }
+            else -> null
+        }
+
+        usage?.let {
+            emit(ChatEvent.Complete(ledger.record(model, it, auxUsage), aux = auxKind))
+        }
+    }.flowOn(Dispatchers.IO)
+
+    // SUMMARY: fold the oldest un-folded turns (beyond the KEEP_RECENT tail) into the running summary
+    // once the un-folded tail outgrows FOLD_THRESHOLD. Returns the summarization call's usage.
     private fun foldOldest(): Usage? {
-        val foldCount = recent.size - KEEP_RECENT
+        val unsummarized = history.drop(summarizedCount)
+        if (unsummarized.size <= FOLD_THRESHOLD) return null
+        val foldCount = unsummarized.size - KEEP_RECENT
         if (foldCount <= 0) return null
-        val toFold = recent.take(foldCount)
-        val (updated, summaryUsage) = summarize(summary, toFold)
+        val (updated, summaryUsage) = summarize(summary, unsummarized.take(foldCount))
         summary = updated
         summarizedCount += foldCount
-        val kept = recent.drop(foldCount)
-        recent.clear()
-        recent.addAll(kept)
         return summaryUsage
+    }
+
+    // STICKY_FACTS: merge the latest exchange into the key-value facts via one flash call.
+    private fun refreshFacts(userText: String, assistantText: String): Usage? {
+        val instruction = buildString {
+            append("Current facts:\n").append(factsJson).append("\n\n")
+            append("Latest exchange:\n")
+            append("user: ").append(userText).append('\n')
+            append("assistant: ").append(assistantText).append('\n')
+        }
+        val (text, usage) = helperCall(FACTS_SYSTEM_PROMPT, instruction)
+        text?.let {
+            val parsed = parseFacts(it)
+            if (parsed.isNotEmpty()) {
+                facts.clear()
+                facts.putAll(parsed)
+            }
+        }
+        return usage
     }
 
     // One non-streaming flash call: merge the existing summary + the folded turns into a new summary.
@@ -183,11 +318,18 @@ class WishChatAgent(
             append("New messages to fold into the summary:\n")
             toFold.forEach { append(it.role).append(": ").append(it.content).append('\n') }
         }
+        val (text, usage) = helperCall(SUMMARY_SYSTEM_PROMPT, instruction)
+        // If the summary call returns nothing usable, keep the existing summary unchanged.
+        return (text?.takeIf { it.isNotBlank() } ?: existing) to usage
+    }
+
+    // Shared non-streaming flash request used by the summary fold and the facts refresh.
+    private fun helperCall(system: String, userInstruction: String): Pair<String?, Usage?> {
         val payload = ChatRequest(
             model = SUMMARY_MODEL,
             messages = listOf(
-                ChatMessage(role = "system", content = SUMMARY_SYSTEM_PROMPT),
-                ChatMessage(role = "user", content = instruction)
+                ChatMessage(role = "system", content = system),
+                ChatMessage(role = "user", content = userInstruction)
             ),
             maxTokens = 1024,
             stream = false
@@ -199,14 +341,29 @@ class WishChatAgent(
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
             val body = json.decodeFromString<ChatResponse>(response.body.string())
-            val text = body.choices.firstOrNull()?.message?.content?.trim()
-            // If the summary call returns nothing usable, keep the existing summary unchanged.
-            return (text?.takeIf { it.isNotBlank() } ?: existing) to body.usage
+            return body.choices.firstOrNull()?.message?.content?.trim() to body.usage
         }
     }
 
     private fun summaryContext(text: String): String =
         "Summary of the earlier conversation (older turns were compressed to save tokens):\n$text"
+
+    private fun factsContext(): String = buildString {
+        append("Known facts about this conversation (carried across the whole chat):\n")
+        facts.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
+    }
+
+    // Parse a JSON object of string values, tolerating code fences / surrounding prose by slicing
+    // from the first '{' to the last '}'. Returns empty on any failure (caller keeps prior facts).
+    private fun parseFacts(raw: String): Map<String, String> {
+        val start = raw.indexOf('{')
+        val end = raw.lastIndexOf('}')
+        if (start < 0 || end <= start) return emptyMap()
+        return runCatching {
+            json.parseToJsonElement(raw.substring(start, end + 1)).jsonObject
+                .mapValues { it.value.jsonPrimitive.content }
+        }.getOrDefault(emptyMap())
+    }
 
     // Map a non-2xx DeepSeek response to an exception. A 400 whose error message mentions the
     // model's maximum context length becomes the distinct [ContextWindowExceededException];

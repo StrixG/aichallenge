@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import me.obrekht.wishu.agent.ContextStrategy
 
 class SettingsRepository(context: Context) {
 
@@ -19,21 +20,33 @@ class SettingsRepository(context: Context) {
         prefs.edit().putString(KEY_MODEL, model).apply()
     }
 
-    // History compression: fold old turns into a summary instead of re-sending the whole dialog.
-    private val _compressionEnabled = MutableStateFlow(
-        prefs.getBoolean(KEY_COMPRESSION, COMPRESSION_DEFAULT)
+    // Context-management strategy used when building each request (Sliding Window / Summary /
+    // Sticky Facts / Branching). Persisted by enum name.
+    private val _strategy = MutableStateFlow(
+        ContextStrategy.fromName(prefs.getString(KEY_STRATEGY, null))
     )
-    val compressionEnabled: StateFlow<Boolean> = _compressionEnabled.asStateFlow()
+    val strategy: StateFlow<ContextStrategy> = _strategy.asStateFlow()
 
-    fun setCompression(enabled: Boolean) {
-        _compressionEnabled.value = enabled
-        prefs.edit().putBoolean(KEY_COMPRESSION, enabled).apply()
+    fun setStrategy(strategy: ContextStrategy) {
+        _strategy.value = strategy
+        prefs.edit().putString(KEY_STRATEGY, strategy.name).apply()
+    }
+
+    // The branch the chat is currently on (Branching strategy). Defaults to the root branch.
+    private val _activeBranchId = MutableStateFlow(
+        prefs.getLong(KEY_ACTIVE_BRANCH, ROOT_BRANCH_ID)
+    )
+    val activeBranchId: StateFlow<Long> = _activeBranchId.asStateFlow()
+
+    fun setActiveBranch(id: Long) {
+        _activeBranchId.value = id
+        prefs.edit().putLong(KEY_ACTIVE_BRANCH, id).apply()
     }
 
     companion object {
         const val MODEL_DEFAULT = "deepseek-v4-flash"
         private const val KEY_MODEL = "deepseek_model"
-        private const val COMPRESSION_DEFAULT = true
-        private const val KEY_COMPRESSION = "compress_history"
+        private const val KEY_STRATEGY = "context_strategy"
+        private const val KEY_ACTIVE_BRANCH = "active_branch_id"
     }
 }

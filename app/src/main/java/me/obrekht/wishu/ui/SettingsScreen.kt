@@ -12,9 +12,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -25,7 +25,6 @@ import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -45,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.obrekht.wishu.R
+import me.obrekht.wishu.agent.ContextStrategy
 
 private data class LanguageOption(val tag: String, val label: String)
 private data class ModelOption(val id: String, val label: String)
@@ -69,7 +69,7 @@ fun SettingsScreen(
         ModelOption("deepseek-v4-pro", "DeepSeek V4 Pro")
     )
     val selectedModel by viewModel.selectedModel.collectAsState()
-    val compressionEnabled by viewModel.compressionEnabled.collectAsState()
+    val strategy by viewModel.strategy.collectAsState()
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -134,56 +134,28 @@ fun SettingsScreen(
             }
 
             SettingsSection(
-                icon = Icons.Rounded.Compress,
-                title = stringResource(R.string.compression_label)
+                icon = Icons.Rounded.Tune,
+                title = stringResource(R.string.strategy_label)
             ) {
-                SwitchOption(
-                    label = stringResource(R.string.compression_toggle),
-                    description = stringResource(R.string.compression_desc),
-                    checked = compressionEnabled,
-                    shape = groupedItemShape(0, 1),
-                    onCheckedChange = { viewModel.setCompression(it) }
-                )
+                val strategies = ContextStrategy.entries
+                strategies.forEachIndexed { index, option ->
+                    SelectableOption(
+                        label = stringResource(strategyLabel(option)),
+                        selected = strategy == option,
+                        shape = groupedItemShape(index, strategies.size),
+                        onSelect = { viewModel.setStrategy(option) }
+                    )
+                }
             }
         }
     }
 }
 
-@Composable
-private fun SwitchOption(
-    label: String,
-    description: String,
-    checked: Boolean,
-    shape: RoundedCornerShape,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Surface(
-        onClick = { onCheckedChange(!checked) },
-        shape = shape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = label, style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
-                Switch(checked = checked, onCheckedChange = null)
-            }
-        }
-    }
+private fun strategyLabel(strategy: ContextStrategy): Int = when (strategy) {
+    ContextStrategy.SUMMARY -> R.string.strategy_summary
+    ContextStrategy.SLIDING_WINDOW -> R.string.strategy_sliding_window
+    ContextStrategy.STICKY_FACTS -> R.string.strategy_sticky_facts
+    ContextStrategy.BRANCHING -> R.string.strategy_branching
 }
 
 @Composable

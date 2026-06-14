@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import kotlinx.coroutines.flow.StateFlow
 import me.obrekht.wishu.WishuApplication
+import me.obrekht.wishu.agent.ContextStrategy
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -13,7 +14,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setModel(model: String) = settingsRepository.setModel(model)
 
-    val compressionEnabled: StateFlow<Boolean> = settingsRepository.compressionEnabled
+    val strategy: StateFlow<ContextStrategy> = settingsRepository.strategy
 
-    fun setCompression(enabled: Boolean) = settingsRepository.setCompression(enabled)
+    fun setStrategy(strategy: ContextStrategy) = settingsRepository.setStrategy(strategy)
 }

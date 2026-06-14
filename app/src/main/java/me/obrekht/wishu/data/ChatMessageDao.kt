@@ -6,8 +6,8 @@ import androidx.room.Query
 
 @Dao
 interface ChatMessageDao {
-    @Query("SELECT * FROM chat_messages ORDER BY id ASC")
-    suspend fun getAll(): List<ChatMessageEntity>
+    @Query("SELECT * FROM chat_messages WHERE branchId = :branchId ORDER BY id ASC")
+    suspend fun getByBranch(branchId: Long): List<ChatMessageEntity>
 
     @Insert
     suspend fun insert(message: ChatMessageEntity)

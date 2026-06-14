@@ -15,13 +15,23 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DataUsage
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
@@ -42,16 +52,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.obrekht.wishu.R
+import me.obrekht.wishu.agent.AuxKind
+import me.obrekht.wishu.agent.ContextStrategy
 import me.obrekht.wishu.agent.TurnTokens
 import java.util.Locale
 
@@ -89,9 +104,9 @@ fun ChatScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(stringResource(R.string.chat_title))
                                 Spacer(Modifier.width(8.dp))
-                                CompressionBadge(
-                                    enabled = uiState.compressionEnabled,
-                                    onToggle = { viewModel.toggleCompression() }
+                                StrategyChip(
+                                    strategy = uiState.strategy,
+                                    onSelect = { viewModel.setStrategy(it) }
                                 )
                             }
                             if (uiState.model.isNotBlank()) {
@@ -229,6 +244,7 @@ fun ChatScreen(
                 )
             }
         } else {
+            val isBranching = uiState.strategy == ContextStrategy.BRANCHING
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -237,13 +253,25 @@ fun ChatScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                itemsIndexed(uiState.messages) { _, message ->
+                itemsIndexed(uiState.messages) { index, message ->
+                    val versionInfo = uiState.versionGroups[index]
                     if (message.role == "user") {
-                        UserBubble(message.content)
+                        UserBubble(
+                            text = message.content,
+                            versionInfo = versionInfo,
+                            showEditControls = isBranching && !uiState.isStreaming,
+                            onEdit = { newText -> viewModel.editMessage(index, newText) },
+                            onSwitchBranch = viewModel::switchBranch
+                        )
                     } else {
                         AssistantBubble(
                             message = message,
-                            tokens = message.tokens
+                            tokens = message.tokens,
+                            versionInfo = versionInfo,
+                            showRegenerate = isBranching && !uiState.isStreaming &&
+                                index == uiState.messages.lastIndex,
+                            onRegenerate = viewModel::regenerate,
+                            onSwitchBranch = viewModel::switchBranch
                         )
                     }
                 }
@@ -252,45 +280,184 @@ fun ChatScreen(
     }
 }
 
-// Live mirror of the Settings compression toggle, and a tap-target to flip it without leaving the
-// chat — so a screen recording shows the mode and switches it in one place.
+// The active context strategy as a tap-to-switch chip with a dropdown — so a screen recording
+// shows the mode and switches between all four in one place.
 @Composable
-private fun CompressionBadge(enabled: Boolean, onToggle: () -> Unit) {
-    val container = if (enabled) MaterialTheme.colorScheme.primary
-    else MaterialTheme.colorScheme.surfaceVariant
-    val content = if (enabled) MaterialTheme.colorScheme.onPrimary
-    else MaterialTheme.colorScheme.onSurfaceVariant
+private fun StrategyChip(strategy: ContextStrategy, onSelect: (ContextStrategy) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
     Surface(
-        onClick = onToggle,
-        color = container,
-        contentColor = content,
+        onClick = { expanded = true },
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
         shape = RoundedCornerShape(50)
     ) {
-        Text(
-            text = stringResource(
-                if (enabled) R.string.chat_compression_on else R.string.chat_compression_off
-            ),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+        ) {
+            Icon(
+                Icons.Rounded.Tune,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                text = stringResource(R.string.chat_strategy_chip, stringResource(strategyLabel(strategy))),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Icon(
+                Icons.Rounded.ArrowDropDown,
+                contentDescription = stringResource(R.string.cd_select_strategy),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            ContextStrategy.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(strategyLabel(option))) },
+                    onClick = {
+                        expanded = false
+                        onSelect(option)
+                    }
+                )
+            }
+        }
     }
 }
 
+// Version pager: compact ‹ n/m › row shown under bubbles that have alternative versions.
 @Composable
-private fun UserBubble(text: String) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth(0.85f)
+private fun VersionPager(info: VersionInfo, onSwitchBranch: (Long) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        IconButton(
+            onClick = { info.prevId?.let(onSwitchBranch) },
+            enabled = info.prevId != null,
+            modifier = Modifier.size(32.dp)
         ) {
-            Text(
-                text = text,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                style = MaterialTheme.typography.bodyLarge
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                contentDescription = stringResource(R.string.cd_prev_version),
+                modifier = Modifier.size(18.dp)
             )
+        }
+        Text(
+            text = stringResource(R.string.version_indicator, info.current, info.total),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+        IconButton(
+            onClick = { info.nextId?.let(onSwitchBranch) },
+            enabled = info.nextId != null,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = stringResource(R.string.cd_next_version),
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+private fun strategyLabel(strategy: ContextStrategy): Int = when (strategy) {
+    ContextStrategy.SUMMARY -> R.string.strategy_summary
+    ContextStrategy.SLIDING_WINDOW -> R.string.strategy_sliding_window
+    ContextStrategy.STICKY_FACTS -> R.string.strategy_sticky_facts
+    ContextStrategy.BRANCHING -> R.string.strategy_branching
+}
+
+@Composable
+private fun UserBubble(
+    text: String,
+    versionInfo: VersionInfo?,
+    showEditControls: Boolean,
+    onEdit: (String) -> Unit,
+    onSwitchBranch: (Long) -> Unit
+) {
+    var editing by remember { mutableStateOf(false) }
+    var editText by remember(text) { mutableStateOf(TextFieldValue(text)) }
+
+    Column {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            if (showEditControls && !editing) {
+                IconButton(
+                    onClick = { editing = true },
+                    modifier = Modifier.size(36.dp).align(Alignment.CenterVertically)
+                ) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = stringResource(R.string.cd_edit_message),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+            }
+            if (editing) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth(0.85f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextField(
+                            value = editText,
+                            onValueChange = { editText = it },
+                            modifier = Modifier.weight(1f),
+                            maxLines = 8,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                disabledIndicatorColor = Color.Transparent,
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent
+                            )
+                        )
+                        IconButton(
+                            onClick = {
+                                val newText = editText.text.trim()
+                                if (newText.isNotBlank()) {
+                                    editing = false
+                                    onEdit(newText)
+                                }
+                            },
+                            enabled = editText.text.isNotBlank()
+                        ) {
+                            Icon(
+                                Icons.Rounded.Check,
+                                contentDescription = stringResource(R.string.cd_edit_confirm)
+                            )
+                        }
+                    }
+                }
+            } else {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth(0.85f)
+                ) {
+                    Text(
+                        text = text,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+            }
+        }
+        if (versionInfo != null && versionInfo.total > 1) {
+            VersionPager(versionInfo, onSwitchBranch)
         }
     }
 }
@@ -339,75 +506,101 @@ private fun StatRow(label: String, value: String, emphasis: Boolean = false, ind
 @Composable
 private fun AssistantBubble(
     message: ChatUiMessage,
-    tokens: TurnTokens?
+    tokens: TurnTokens?,
+    versionInfo: VersionInfo?,
+    showRegenerate: Boolean,
+    onRegenerate: () -> Unit,
+    onSwitchBranch: (Long) -> Unit
 ) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.fillMaxWidth(0.92f)
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                if (message.content.isBlank()) {
-                    LoadingIndicator(color = MaterialTheme.colorScheme.primary)
-                } else {
-                    MarkdownText(message.content)
-                }
-                // Per-turn accounting: DeepSeek's exact token counts for this turn, as a labeled
-                // stat grid (label left, value right) so the numbers are easy to read off in a demo.
-                tokens?.let {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(top = 8.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    Column(
-                        modifier = Modifier.padding(top = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.token_section_title),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary
+    val tokens2 = message.tokens
+    Column {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth(0.92f)
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    if (message.content.isBlank()) {
+                        LoadingIndicator(color = MaterialTheme.colorScheme.primary)
+                    } else {
+                        MarkdownText(message.content)
+                    }
+                    // Per-turn accounting.
+                    tokens2?.let {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(top = 8.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
                         )
-                        StatRow(stringResource(R.string.token_label_prompt), tokens(it.promptActual), emphasis = true)
-                        // Cache hit/miss split: the hit share is what makes repeated prefixes cheap.
-                        StatRow(
-                            stringResource(R.string.token_label_cache_hit),
-                            stringResource(
-                                R.string.token_value_with_pct,
-                                tokens(it.cacheHitActual),
-                                percent(it.cacheHitActual, it.promptActual)
-                            ),
-                            indent = true
-                        )
-                        StatRow(stringResource(R.string.token_label_cache_miss), tokens(it.cacheMissActual), indent = true)
-                        StatRow(stringResource(R.string.token_label_reply), tokens(it.completionActual))
-                        StatRow(stringResource(R.string.token_label_total), tokens(it.totalActual), emphasis = true)
-                        StatRow(stringResource(R.string.token_label_cost), "$" + usd(it.turnCostUsd))
-                        // This turn folded older messages: show the compression note + its token cost.
-                        if (it.summaryPromptTokens > 0) {
+                        Column(
+                            modifier = Modifier.padding(top = 6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
                             Text(
-                                text = stringResource(R.string.chat_summarized),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 4.dp)
+                                text = stringResource(R.string.token_section_title),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
                             )
+                            StatRow(stringResource(R.string.token_label_prompt), tokens(it.promptActual), emphasis = true)
                             StatRow(
-                                stringResource(R.string.token_label_summary),
+                                stringResource(R.string.token_label_cache_hit),
                                 stringResource(
-                                    R.string.token_value_summary,
-                                    tokens(it.summaryPromptTokens),
-                                    tokens(it.summaryCompletionTokens)
+                                    R.string.token_value_with_pct,
+                                    tokens(it.cacheHitActual),
+                                    percent(it.cacheHitActual, it.promptActual)
                                 ),
                                 indent = true
                             )
+                            StatRow(stringResource(R.string.token_label_cache_miss), tokens(it.cacheMissActual), indent = true)
+                            StatRow(stringResource(R.string.token_label_reply), tokens(it.completionActual))
+                            StatRow(stringResource(R.string.token_label_total), tokens(it.totalActual), emphasis = true)
+                            StatRow(stringResource(R.string.token_label_cost), "$" + usd(it.turnCostUsd))
+                            if (it.auxPromptTokens > 0 && message.aux != AuxKind.NONE) {
+                                val noteRes = if (message.aux == AuxKind.FACTS) {
+                                    R.string.chat_facts_updated
+                                } else {
+                                    R.string.chat_summarized
+                                }
+                                Text(
+                                    text = stringResource(noteRes),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                                StatRow(
+                                    stringResource(R.string.token_label_aux),
+                                    stringResource(
+                                        R.string.token_value_aux,
+                                        tokens(it.auxPromptTokens),
+                                        tokens(it.auxCompletionTokens)
+                                    ),
+                                    indent = true
+                                )
+                            }
                         }
                     }
                 }
             }
+            if (showRegenerate) {
+                Spacer(Modifier.width(4.dp))
+                IconButton(
+                    onClick = onRegenerate,
+                    modifier = Modifier.size(36.dp).align(Alignment.Bottom)
+                ) {
+                    Icon(
+                        Icons.Rounded.Refresh,
+                        contentDescription = stringResource(R.string.cd_regenerate),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        if (versionInfo != null && versionInfo.total > 1) {
+            VersionPager(versionInfo, onSwitchBranch)
         }
     }
 }
