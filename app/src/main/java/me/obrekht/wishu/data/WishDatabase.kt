@@ -7,10 +7,15 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Wish::class, ChatMessageEntity::class], version = 2, exportSchema = false)
+@Database(
+    entities = [Wish::class, ChatMessageEntity::class, ChatSummaryEntity::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class WishDatabase : RoomDatabase() {
     abstract fun wishDao(): WishDao
     abstract fun chatMessageDao(): ChatMessageDao
+    abstract fun chatSummaryDao(): ChatSummaryDao
 
     companion object {
         @Volatile
@@ -27,10 +32,21 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v2 -> v3: add the single-row chat_summary table (history compression). Existing rows kept.
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `chat_summary` " +
+                        "(`id` INTEGER PRIMARY KEY NOT NULL, " +
+                        "`summary` TEXT NOT NULL, `summarizedCount` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): WishDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

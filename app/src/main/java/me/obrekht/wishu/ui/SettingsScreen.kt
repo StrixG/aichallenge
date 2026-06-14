@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -24,6 +25,7 @@ import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -67,6 +69,7 @@ fun SettingsScreen(
         ModelOption("deepseek-v4-pro", "DeepSeek V4 Pro")
     )
     val selectedModel by viewModel.selectedModel.collectAsState()
+    val compressionEnabled by viewModel.compressionEnabled.collectAsState()
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -128,6 +131,56 @@ fun SettingsScreen(
                         onSelect = { viewModel.setModel(option.id) }
                     )
                 }
+            }
+
+            SettingsSection(
+                icon = Icons.Rounded.Compress,
+                title = stringResource(R.string.compression_label)
+            ) {
+                SwitchOption(
+                    label = stringResource(R.string.compression_toggle),
+                    description = stringResource(R.string.compression_desc),
+                    checked = compressionEnabled,
+                    shape = groupedItemShape(0, 1),
+                    onCheckedChange = { viewModel.setCompression(it) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SwitchOption(
+    label: String,
+    description: String,
+    checked: Boolean,
+    shape: RoundedCornerShape,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        onClick = { onCheckedChange(!checked) },
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = label, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+                Switch(checked = checked, onCheckedChange = null)
             }
         }
     }

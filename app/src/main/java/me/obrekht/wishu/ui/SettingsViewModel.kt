@@ -12,4 +12,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val selectedModel: StateFlow<String> = settingsRepository.selectedModel
 
     fun setModel(model: String) = settingsRepository.setModel(model)
+
+    val compressionEnabled: StateFlow<Boolean> = settingsRepository.compressionEnabled
+
+    fun setCompression(enabled: Boolean) = settingsRepository.setCompression(enabled)
 }

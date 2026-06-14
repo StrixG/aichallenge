@@ -15,16 +15,12 @@ import me.obrekht.wishu.agent.ChatEvent
 import me.obrekht.wishu.agent.ContextWindowExceededException
 import me.obrekht.wishu.agent.TurnTokens
 import me.obrekht.wishu.agent.WishChatAgent
-import me.obrekht.wishu.agent.parseWishItems
-import me.obrekht.wishu.agent.stripWishItems
 import me.obrekht.wishu.data.ChatHistoryRepository
-import me.obrekht.wishu.data.WishRepository
 import me.obrekht.wishu.network.ChatMessage
 
 data class ChatUiMessage(
     val role: String, // "user" | "assistant"
     val content: String,
-    val items: List<String> = emptyList(),
     // Token accounting for this assistant turn (null for user turns / restored bubbles).
     val tokens: TurnTokens? = null
 )
@@ -35,28 +31,47 @@ data class ChatUiState(
     val isStreaming: Boolean = false,
     val errorMessage: String? = null,
     // Per-turn token accounting; the last entry carries the cumulative totals/cost.
-    val tokenTurns: List<TurnTokens> = emptyList()
+    val tokenTurns: List<TurnTokens> = emptyList(),
+    // Mirrors the Settings compression toggle so the chat shows the active mode.
+    val compressionEnabled: Boolean = false,
+    // Mirrors the Settings model choice; drives pricing, so it's shown next to the token panel.
+    val model: String = ""
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as WishuApplication
     private val agent = WishChatAgent(app.streamingHttpClient)
-    private val wishRepository = WishRepository(app.database.wishDao(), app.deepSeekApi)
-    private val chatHistoryRepository = ChatHistoryRepository(app.database.chatMessageDao())
+    private val chatHistoryRepository =
+        ChatHistoryRepository(app.database.chatMessageDao(), app.database.chatSummaryDao())
     private val settingsRepository = app.settingsRepository
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     init {
-        // Restore the saved transcript: re-seed the agent (so DeepSeek gets full context again)
-        // and rebuild the on-screen bubbles as if the agent never stopped.
+        // Restore the saved transcript: re-seed the agent (summary + recent tail, so the next
+        // request rebuilds the same compressed context) and rebuild every on-screen bubble.
         viewModelScope.launch {
             val saved = chatHistoryRepository.load()
-            if (saved.isEmpty()) return@launch
-            agent.restore(saved)
+            val savedSummary = chatHistoryRepository.loadSummary()
+            if (saved.isEmpty() && savedSummary == null) return@launch
+            val summarizedCount = savedSummary?.summarizedCount ?: 0
+            // The agent only needs the un-folded tail; the bubbles still show the full log.
+            agent.restore(savedSummary?.summary, summarizedCount, saved.drop(summarizedCount))
             _uiState.update { it.copy(messages = saved.map(::toUiMessage)) }
+        }
+        // Mirror the live compression toggle so the chat badge updates when it's flipped in Settings.
+        viewModelScope.launch {
+            settingsRepository.compressionEnabled.collect { enabled ->
+                _uiState.update { it.copy(compressionEnabled = enabled) }
+            }
+        }
+        // Mirror the live model choice so the chat subtitle updates when it's changed in Settings.
+        viewModelScope.launch {
+            settingsRepository.selectedModel.collect { model ->
+                _uiState.update { it.copy(model = model) }
+            }
         }
     }
 
@@ -68,32 +83,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val text = _uiState.value.inputText.text.trim()
         if (text.isBlank() || _uiState.value.isStreaming) return
         _uiState.update { it.copy(inputText = TextFieldValue()) }
-        // On failure restore the typed text so the user can retry.
-        dispatch(displayText = text, payloadText = text, restoreOnError = text)
+        dispatch(text)
     }
 
     /**
-     * Demo: fire a turn whose payload is a multi-megabyte dummy string — far past the model's real
-     * ~1M-token context window — so DeepSeek rejects it and the distinct overflow error shows
-     * without anyone pasting a novel. The bubble shows a short label, not the giant payload.
+     * Append the user/assistant bubbles, stream the reply, and handle completion/errors. On failure
+     * the typed [text] is put back in the input box so the user can retry.
      */
-    fun simulateOverflow() {
-        if (_uiState.value.isStreaming) return
-        val dummy = "lorem ipsum dolor sit amet ".repeat(200_000) // ~5.4M chars ≈ 1.35M tokens
-        dispatch(displayText = OVERFLOW_LABEL, payloadText = dummy, restoreOnError = null)
-    }
-
-    /**
-     * Append the user/assistant bubbles, stream the reply, and handle completion/errors.
-     * [displayText] is what the user bubble shows; [payloadText] is what's actually sent (they
-     * differ only for [simulateOverflow]). On failure [restoreOnError], if non-null, is put back
-     * in the input box.
-     */
-    private fun dispatch(displayText: String, payloadText: String, restoreOnError: String?) {
+    private fun dispatch(text: String) {
         _uiState.update {
             it.copy(
                 messages = it.messages +
-                    ChatUiMessage(role = "user", content = displayText) +
+                    ChatUiMessage(role = "user", content = text) +
                     ChatUiMessage(role = "assistant", content = ""),
                 isStreaming = true,
                 errorMessage = null
@@ -103,46 +104,45 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val model = settingsRepository.selectedModel.value
-                agent.send(payloadText, model).collect { event ->
+                val compress = settingsRepository.compressionEnabled.value
+                var didSummarize = false
+                agent.send(text, model, compress).collect { event ->
                     when (event) {
                         is ChatEvent.Token -> _uiState.update { state ->
                             state.copy(messages = appendToLast(state.messages, event.delta))
                         }
-                        is ChatEvent.Complete -> _uiState.update { state ->
-                            // Attach to the streaming assistant bubble; keep the list for the
-                            // session-cumulative meter (its last entry holds the running totals).
-                            val last = state.messages.last()
-                            state.copy(
-                                messages = state.messages.dropLast(1) +
-                                    last.copy(tokens = event.tokens),
-                                tokenTurns = state.tokenTurns + event.tokens
-                            )
+                        is ChatEvent.Complete -> {
+                            didSummarize = event.summarized
+                            _uiState.update { state ->
+                                // Attach to the streaming assistant bubble; keep the list for the
+                                // session-cumulative meter (its last entry holds the running totals).
+                                val last = state.messages.last()
+                                state.copy(
+                                    messages = state.messages.dropLast(1) +
+                                        last.copy(tokens = event.tokens),
+                                    tokenTurns = state.tokenTurns + event.tokens
+                                )
+                            }
                         }
                     }
                 }
                 val rawReply = _uiState.value.messages.last().content
-                _uiState.update { state ->
-                    val last = state.messages.last()
-                    val items = parseWishItems(last.content)
-                    // Drop the bullet lines from the bubble text; they render as add buttons.
-                    val display = if (items.isEmpty()) last.content else stripWishItems(last.content)
-                    state.copy(
-                        messages = state.messages.dropLast(1) +
-                            last.copy(content = display, items = items),
-                        isStreaming = false
-                    )
-                }
-                // Persist the completed turn. Store the raw assistant content (with bullets) so
-                // parseWishItems works again on restore, exactly like a fresh stream.
-                chatHistoryRepository.append("user", displayText)
+                _uiState.update { it.copy(isStreaming = false) }
+                // Persist the completed turn.
+                chatHistoryRepository.append("user", text)
                 chatHistoryRepository.append("assistant", rawReply)
+                // If this turn folded older messages, persist the new summary + its coverage so a
+                // restart rebuilds the same compressed context.
+                if (didSummarize) {
+                    agent.summary?.let { chatHistoryRepository.saveSummary(it, agent.summarizedCount) }
+                }
             } catch (e: ContextWindowExceededException) {
                 // The model's real context window overflowed. The agent didn't commit the turn,
                 // so drop both bubbles, optionally restore the input, and show the distinct error.
                 _uiState.update { state ->
                     state.copy(
                         messages = state.messages.dropLast(2),
-                        inputText = restoreOnError?.let { TextFieldValue(it) } ?: state.inputText,
+                        inputText = TextFieldValue(text),
                         isStreaming = false,
                         errorMessage = app.getString(R.string.error_context_window)
                     )
@@ -153,7 +153,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { state ->
                     state.copy(
                         messages = state.messages.dropLast(2),
-                        inputText = restoreOnError?.let { TextFieldValue(it) } ?: state.inputText,
+                        inputText = TextFieldValue(text),
                         isStreaming = false,
                         errorMessage = app.getString(R.string.error_chat)
                     )
@@ -162,8 +162,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addItem(text: String) {
-        viewModelScope.launch { wishRepository.addWish(text) }
+    /** Flip history compression from the chat screen (same setting the Settings toggle drives). */
+    fun toggleCompression() {
+        settingsRepository.setCompression(!_uiState.value.compressionEnabled)
     }
 
     /** Wipe the whole session: on-screen bubbles, persisted history, agent context + token ledger. */
@@ -172,7 +173,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             agent.reset()
             chatHistoryRepository.clear()
-            _uiState.value = ChatUiState()
+            // Reset only the conversation fields with copy(); the mirrored settings (compression,
+            // model) stay as-is. Their StateFlow collectors won't re-emit an unchanged value, so
+            // rebuilding the whole state would leave them stuck at defaults.
+            _uiState.update {
+                it.copy(
+                    messages = emptyList(),
+                    inputText = TextFieldValue(),
+                    isStreaming = false,
+                    errorMessage = null,
+                    tokenTurns = emptyList()
+                )
+            }
         }
     }
 
@@ -180,23 +192,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(errorMessage = null) }
     }
 
-    // Rebuild a UI bubble from a stored turn. Assistant bullet lines become add buttons again
-    // (same parse/strip as the live post-stream path); user turns pass through unchanged.
-    private fun toUiMessage(message: ChatMessage): ChatUiMessage {
-        if (message.role != "assistant") {
-            return ChatUiMessage(role = message.role, content = message.content)
-        }
-        val items = parseWishItems(message.content)
-        val display = if (items.isEmpty()) message.content else stripWishItems(message.content)
-        return ChatUiMessage(role = "assistant", content = display, items = items)
-    }
+    // Rebuild a UI bubble from a stored turn: content passes through unchanged.
+    private fun toUiMessage(message: ChatMessage): ChatUiMessage =
+        ChatUiMessage(role = message.role, content = message.content)
 
     private fun appendToLast(messages: List<ChatUiMessage>, delta: String): List<ChatUiMessage> {
         val last = messages.last()
         return messages.dropLast(1) + last.copy(content = last.content + delta)
-    }
-
-    private companion object {
-        const val OVERFLOW_LABEL = "⚠️ Simulating context overflow…"
     }
 }

@@ -27,7 +27,8 @@ data class ChatMessage(
 
 @Serializable
 data class ChatResponse(
-    val choices: List<Choice>
+    val choices: List<Choice>,
+    val usage: Usage? = null
 )
 
 @Serializable

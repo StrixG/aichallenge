@@ -41,6 +41,11 @@ private fun costUsd(
 /**
  * One turn's accounting. Every field is DeepSeek's exact count; `cumulative*` sum across the dialog.
  * `prompt` = the whole payload sent that turn (grows every turn); `cacheHit + cacheMiss == prompt`.
+ *
+ * `summary*` are the tokens spent on the *extra* summarization call when this turn folded older
+ * messages into the running summary (0 on turns with no fold). They're the honest cost of
+ * compression — bound the chat prompt, but pay a periodic summary-call overhead. Their cost is
+ * already included in `turnCostUsd` / `cumulativeCostUsd`.
  */
 data class TurnTokens(
     val turn: Int,
@@ -51,7 +56,9 @@ data class TurnTokens(
     val totalActual: Int,
     val cumulativeTotal: Int,
     val turnCostUsd: Double,
-    val cumulativeCostUsd: Double
+    val cumulativeCostUsd: Double,
+    val summaryPromptTokens: Int = 0,
+    val summaryCompletionTokens: Int = 0
 )
 
 /**
@@ -64,16 +71,25 @@ class TokenLedger {
 
     fun clear() = _turns.clear()
 
-    /** Record a completed turn from DeepSeek's exact [usage]. */
-    fun record(model: String, usage: Usage): TurnTokens {
+    /**
+     * Record a completed turn from DeepSeek's exact [usage]. [summaryUsage] is the usage of the
+     * extra summarization call made on this turn (null when no fold happened); it's always the
+     * flash model, so its cost is priced at flash rates and added on top of the turn cost.
+     */
+    fun record(model: String, usage: Usage, summaryUsage: Usage? = null): TurnTokens {
         val promptActual = usage.promptTokens
         val completionActual = usage.completionTokens
         val totalActual = usage.totalTokens
         val cacheHit = usage.promptCacheHitTokens
         val cacheMiss = usage.promptCacheMissTokens
 
-        val cumulativeTotal = (_turns.lastOrNull()?.cumulativeTotal ?: 0) + totalActual
-        val turnCost = costUsd(cacheHit, cacheMiss, completionActual, pricingFor(model))
+        val summaryCost = summaryUsage?.let {
+            costUsd(it.promptCacheHitTokens, it.promptCacheMissTokens, it.completionTokens, pricingFor(SUMMARY_MODEL))
+        } ?: 0.0
+
+        val cumulativeTotal = (_turns.lastOrNull()?.cumulativeTotal ?: 0) + totalActual +
+            (summaryUsage?.totalTokens ?: 0)
+        val turnCost = costUsd(cacheHit, cacheMiss, completionActual, pricingFor(model)) + summaryCost
         val cumulativeCost = (_turns.lastOrNull()?.cumulativeCostUsd ?: 0.0) + turnCost
 
         val turn = TurnTokens(
@@ -85,7 +101,9 @@ class TokenLedger {
             totalActual = totalActual,
             cumulativeTotal = cumulativeTotal,
             turnCostUsd = turnCost,
-            cumulativeCostUsd = cumulativeCost
+            cumulativeCostUsd = cumulativeCost,
+            summaryPromptTokens = summaryUsage?.promptTokens ?: 0,
+            summaryCompletionTokens = summaryUsage?.completionTokens ?: 0
         )
         _turns.add(turn)
         logRow(turn)
@@ -94,14 +112,14 @@ class TokenLedger {
 
     private fun logRow(t: TurnTokens) {
         if (t.turn == 1) {
-            Log.i(TAG, "turn | prompt | cHit | cMiss | reply | total | cumTotal | turn\$ | cum\$")
+            Log.i(TAG, "turn | prompt | cHit | cMiss | reply | total | sumP | sumC | cumTotal | turn\$ | cum\$")
         }
         Log.i(
             TAG,
-            "%4d | %6d | %5d | %5d | %5d | %5d | %8d | %.5f | %.5f".format(
+            "%4d | %6d | %5d | %5d | %5d | %5d | %4d | %4d | %8d | %.5f | %.5f".format(
                 t.turn, t.promptActual, t.cacheHitActual, t.cacheMissActual,
-                t.completionActual, t.totalActual, t.cumulativeTotal,
-                t.turnCostUsd, t.cumulativeCostUsd
+                t.completionActual, t.totalActual, t.summaryPromptTokens, t.summaryCompletionTokens,
+                t.cumulativeTotal, t.turnCostUsd, t.cumulativeCostUsd
             )
         )
     }
@@ -114,5 +132,6 @@ class TokenLedger {
 /** Streamed agent output: a content delta, or the final per-turn token accounting. */
 sealed interface ChatEvent {
     data class Token(val delta: String) : ChatEvent
-    data class Complete(val tokens: TurnTokens) : ChatEvent
+    // `summarized` is true on a turn where older messages were folded into the running summary.
+    data class Complete(val tokens: TurnTokens, val summarized: Boolean = false) : ChatEvent
 }

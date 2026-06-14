@@ -22,6 +22,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
@@ -78,4 +79,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     debugImplementation("com.squareup.okhttp3:logging-interceptor:5.3.2")
+
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    // Compose's ui-test-junit4 drags in espresso-core 3.5.0, whose Espresso.onIdle reflects the
+    // removed InputManager.getInstance() and crashes on API 34+ (incl. our SDK 37 target). 3.7.0
+    // uses the InputManagerGlobal fallback, so the UI test runs on the bleeding-edge emulator.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

@@ -20,10 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DataUsage
 import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
@@ -86,7 +84,25 @@ fun ChatScreen(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.chat_title)) },
+                    title = {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(stringResource(R.string.chat_title))
+                                Spacer(Modifier.width(8.dp))
+                                CompressionBadge(
+                                    enabled = uiState.compressionEnabled,
+                                    onToggle = { viewModel.toggleCompression() }
+                                )
+                            }
+                            if (uiState.model.isNotBlank()) {
+                                Text(
+                                    text = modelLabel(uiState.model),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {
                             Icon(
@@ -96,16 +112,6 @@ fun ChatScreen(
                         }
                     },
                     actions = {
-                        // Demo: force the real context-window overflow without pasting a novel.
-                        IconButton(
-                            onClick = { viewModel.simulateOverflow() },
-                            enabled = !uiState.isStreaming
-                        ) {
-                            Icon(
-                                Icons.Rounded.Science,
-                                contentDescription = stringResource(R.string.cd_simulate_overflow)
-                            )
-                        }
                         IconButton(
                             onClick = { viewModel.clearSession() },
                             enabled = uiState.messages.isNotEmpty() && !uiState.isStreaming
@@ -124,6 +130,8 @@ fun ChatScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.fillMaxWidth()
                     ) {
+                        val turnCount = uiState.tokenTurns.size
+                        val avgPerTurn = if (turnCount > 0) total.cumulativeTotal / turnCount else 0
                         Row(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -134,15 +142,25 @@ fun ChatScreen(
                                 contentDescription = null,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Text(
-                                text = stringResource(
-                                    R.string.token_cumulative,
-                                    total.cumulativeTotal,
-                                    usd(total.cumulativeCostUsd)
-                                ),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                            Column {
+                                Text(
+                                    text = stringResource(
+                                        R.string.token_cumulative,
+                                        tokens(total.cumulativeTotal),
+                                        usd(total.cumulativeCostUsd)
+                                    ),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = stringResource(
+                                        R.string.token_cumulative_detail,
+                                        turnCount,
+                                        tokens(avgPerTurn)
+                                    ),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
                         }
                     }
                 }
@@ -225,13 +243,37 @@ fun ChatScreen(
                     } else {
                         AssistantBubble(
                             message = message,
-                            tokens = message.tokens,
-                            onAddItem = { viewModel.addItem(it) }
+                            tokens = message.tokens
                         )
                     }
                 }
             }
         }
+    }
+}
+
+// Live mirror of the Settings compression toggle, and a tap-target to flip it without leaving the
+// chat — so a screen recording shows the mode and switches it in one place.
+@Composable
+private fun CompressionBadge(enabled: Boolean, onToggle: () -> Unit) {
+    val container = if (enabled) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (enabled) MaterialTheme.colorScheme.onPrimary
+    else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        onClick = onToggle,
+        color = container,
+        contentColor = content,
+        shape = RoundedCornerShape(50)
+    ) {
+        Text(
+            text = stringResource(
+                if (enabled) R.string.chat_compression_on else R.string.chat_compression_off
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
     }
 }
 
@@ -256,12 +298,48 @@ private fun UserBubble(text: String) {
 // Cost is a fraction of a cent per turn; show enough decimals to see it move.
 private fun usd(value: Double): String = String.format(Locale.US, "%.5f", value)
 
+// Friendly name for a model id (brand names, same as SettingsScreen); raw id as a fallback.
+private fun modelLabel(id: String): String = when (id) {
+    "deepseek-v4-flash" -> "DeepSeek V4 Flash"
+    "deepseek-v4-pro" -> "DeepSeek V4 Pro"
+    else -> id
+}
+
+// Token counts get big fast; group thousands so they stay scannable (1234 -> 1,234).
+private fun tokens(value: Int): String = String.format(Locale.US, "%,d", value)
+
+// Cache-hit share of the prompt, rounded to a whole percent (0 when the prompt is empty).
+private fun percent(part: Int, whole: Int): Int =
+    if (whole <= 0) 0 else Math.round(100.0 * part / whole).toInt()
+
+// One label/value line in the token stat grid: label left, value right-aligned.
+@Composable
+private fun StatRow(label: String, value: String, emphasis: Boolean = false, indent: Boolean = false) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (indent) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (emphasis) FontWeight.Bold else FontWeight.Medium,
+            color = if (indent) MaterialTheme.colorScheme.onSurfaceVariant
+            else MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun AssistantBubble(
     message: ChatUiMessage,
-    tokens: TurnTokens?,
-    onAddItem: (String) -> Unit
+    tokens: TurnTokens?
 ) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
         Surface(
@@ -271,59 +349,61 @@ private fun AssistantBubble(
             modifier = Modifier.fillMaxWidth(0.92f)
         ) {
             Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                if (message.content.isBlank() && message.items.isEmpty()) {
+                if (message.content.isBlank()) {
                     LoadingIndicator(color = MaterialTheme.colorScheme.primary)
-                } else if (message.content.isNotBlank()) {
-                    Text(text = message.content, style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    MarkdownText(message.content)
                 }
-                // Per-turn accounting: DeepSeek's exact token counts for this turn.
+                // Per-turn accounting: DeepSeek's exact token counts for this turn, as a labeled
+                // stat grid (label left, value right) so the numbers are easy to read off in a demo.
                 tokens?.let {
                     HorizontalDivider(
                         modifier = Modifier.padding(top = 8.dp),
                         color = MaterialTheme.colorScheme.outlineVariant
                     )
-                    Text(
-                        text = stringResource(
-                            R.string.token_turn,
-                            it.promptActual,
-                            it.cacheHitActual,
-                            it.cacheMissActual,
-                            it.completionActual,
-                            it.totalActual,
-                            usd(it.turnCostUsd)
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-                message.items.forEachIndexed { index, item ->
-                    // Each suggestion sits on its own card so it stands out from the bubble.
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = if (index == 0) 8.dp else 6.dp)
+                    Column(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Text(
+                            text = stringResource(R.string.token_section_title),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        StatRow(stringResource(R.string.token_label_prompt), tokens(it.promptActual), emphasis = true)
+                        // Cache hit/miss split: the hit share is what makes repeated prefixes cheap.
+                        StatRow(
+                            stringResource(R.string.token_label_cache_hit),
+                            stringResource(
+                                R.string.token_value_with_pct,
+                                tokens(it.cacheHitActual),
+                                percent(it.cacheHitActual, it.promptActual)
+                            ),
+                            indent = true
+                        )
+                        StatRow(stringResource(R.string.token_label_cache_miss), tokens(it.cacheMissActual), indent = true)
+                        StatRow(stringResource(R.string.token_label_reply), tokens(it.completionActual))
+                        StatRow(stringResource(R.string.token_label_total), tokens(it.totalActual), emphasis = true)
+                        StatRow(stringResource(R.string.token_label_cost), "$" + usd(it.turnCostUsd))
+                        // This turn folded older messages: show the compression note + its token cost.
+                        if (it.summaryPromptTokens > 0) {
                             Text(
-                                text = item,
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyLarge
+                                text = stringResource(R.string.chat_summarized),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp)
                             )
-                            Spacer(Modifier.width(8.dp))
-                            FilledIconButton(onClick = { onAddItem(item) }) {
-                                Icon(
-                                    Icons.Rounded.Add,
-                                    contentDescription = stringResource(R.string.cd_add_to_wishlist)
-                                )
-                            }
+                            StatRow(
+                                stringResource(R.string.token_label_summary),
+                                stringResource(
+                                    R.string.token_value_summary,
+                                    tokens(it.summaryPromptTokens),
+                                    tokens(it.summaryCompletionTokens)
+                                ),
+                                indent = true
+                            )
                         }
                     }
                 }

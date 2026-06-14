@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import me.obrekht.wishu.network.ApiErrorEnvelope
 import me.obrekht.wishu.network.ChatMessage
 import me.obrekht.wishu.network.ChatRequest
+import me.obrekht.wishu.network.ChatResponse
 import me.obrekht.wishu.network.StreamChunk
 import me.obrekht.wishu.network.StreamOptions
 import me.obrekht.wishu.network.Usage
@@ -22,15 +23,36 @@ private const val ENDPOINT = "https://api.deepseek.com/chat/completions"
 const val CHAT_SYSTEM_PROMPT =
     "You are Wishu's wishlist assistant. Help the user brainstorm realistic, desirable " +
         "wishlist and gift ideas through natural conversation. Keep replies concise. " +
-        "When you propose concrete items the user could add to their wishlist, put each on " +
-        "its own line prefixed with \"- \" and keep each item under about 6 words. " +
         "Always reply in the same language as the user's most recent message."
 
+// Compression is always summarized by the cheap flash model — the work is easy and this keeps the
+// overhead tiny next to the savings on the main chat prompt.
+const val SUMMARY_MODEL = "deepseek-v4-flash"
+
+private const val SUMMARY_SYSTEM_PROMPT =
+    "You compress a wishlist brainstorming chat into one compact running summary. Merge the " +
+        "existing summary and the new messages into a single updated summary of at most ~120 words. " +
+        "Capture: who the gift is for, the occasion, budget, stated likes/dislikes and constraints, " +
+        "and concrete items already proposed. Be terse and factual, no preamble. " +
+        "Output only the summary text, in the language the conversation uses."
+
+// Keep the last 6 raw messages (3 exchanges) verbatim; once the un-folded tail grows past 10
+// messages, fold the oldest down into the running summary.
+private const val KEEP_RECENT = 6
+private const val FOLD_THRESHOLD = 10
+
 /**
- * The agent: owns the multi-turn conversation history and the DeepSeek request/response logic.
- * Callers only see [send] / [transcript] / [restore] — they never build a [ChatRequest] themselves.
- * History lives in memory; [restore] re-seeds prior turns loaded from storage so context survives
- * an app restart.
+ * The agent: owns the multi-turn conversation and the DeepSeek request/response logic.
+ * Callers only see [send] / [restore] / [reset] — they never build a [ChatRequest] themselves.
+ *
+ * History compression: instead of re-sending the whole dialog every turn, the agent keeps only the
+ * last [KEEP_RECENT] raw turns ([recent]) plus a running [summary] of everything folded away. When
+ * compression is on and the raw tail grows past [FOLD_THRESHOLD], the oldest turns are summarized
+ * (one cheap flash call) and dropped from [recent]. The request then carries `system + summary +
+ * recent` instead of the full transcript, so the prompt stays bounded as the dialog grows.
+ *
+ * Everything lives in memory; [restore] re-seeds the summary + recent tail loaded from storage so
+ * context survives an app restart.
  */
 class WishChatAgent(
     private val client: OkHttpClient,
@@ -42,38 +64,58 @@ class WishChatAgent(
         explicitNulls = false
     }
 
-    private val history = mutableListOf(ChatMessage(role = "system", content = systemPrompt))
+    // Recent raw user/assistant turns (no system prompt). The compressed working set.
+    private val recent = mutableListOf<ChatMessage>()
 
-    // Running token accounting across the dialog (resets each session, like history).
+    // Running summary of the folded-away older turns, and how many persisted full-log messages it
+    // already covers (so [restore] can split the saved transcript into folded + recent tail).
+    var summary: String? = null
+        private set
+    var summarizedCount: Int = 0
+        private set
+
+    // Running token accounting across the dialog (resets each session, like the conversation).
     val ledger = TokenLedger()
 
-    // User/assistant turns only (the system prompt stays hidden from the UI).
-    val transcript: List<ChatMessage> get() = history.drop(1)
-
-    /** Re-seed prior user/assistant turns from storage (the system prompt stays at history[0]). */
-    fun restore(messages: List<ChatMessage>) {
-        history.addAll(messages)
+    /** Re-seed the summary + recent tail from storage. */
+    fun restore(summary: String?, summarizedCount: Int, recentMessages: List<ChatMessage>) {
+        this.summary = summary
+        this.summarizedCount = summarizedCount
+        recent.clear()
+        recent.addAll(recentMessages)
     }
 
-    /** Wipe the conversation back to a fresh session: only the system prompt + an empty ledger. */
+    /** Wipe the conversation back to a fresh session: no summary, empty tail + ledger. */
     fun reset() {
-        history.clear()
-        history.add(ChatMessage(role = "system", content = systemPrompt))
+        recent.clear()
+        summary = null
+        summarizedCount = 0
         ledger.clear()
     }
 
     /**
      * Appends the user turn, streams the assistant reply ([ChatEvent.Token] per delta), then emits
-     * one [ChatEvent.Complete] with the turn's token accounting and records the assistant turn.
+     * one [ChatEvent.Complete] with the turn's token accounting. When [compress] is on, older turns
+     * may be folded into [summary] after a successful reply.
      */
     fun send(
         userMessage: String,
-        model: String
+        model: String,
+        compress: Boolean
     ): Flow<ChatEvent> = flow {
         val userTurn = ChatMessage(role = "user", content = userMessage)
-        val payloadMessages = history + userTurn
 
-        // History is committed only AFTER a successful reply (below), so a rejected request —
+        // The request carries the base prompt, the running summary (if any), the recent raw tail,
+        // and the new user turn. With compression off no fold ever runs, so `recent` is the whole
+        // dialog and this is the full transcript — the uncompressed baseline.
+        val payloadMessages = buildList {
+            add(ChatMessage(role = "system", content = systemPrompt))
+            summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
+            addAll(recent)
+            add(userTurn)
+        }
+
+        // The turn is committed only AFTER a successful reply (below), so a rejected request —
         // e.g. the real context window overflowing — never leaves a dangling turn behind.
         val payload = ChatRequest(
             model = model,
@@ -106,13 +148,65 @@ class WishChatAgent(
                 emit(ChatEvent.Token(delta))
             }
         }
-        history.add(userTurn)
-        history.add(ChatMessage(role = "assistant", content = full.toString()))
+        recent.add(userTurn)
+        recent.add(ChatMessage(role = "assistant", content = full.toString()))
+
+        // Fold older turns into the summary once the raw tail outgrows the window (compression on).
+        val summaryUsage = if (compress && recent.size > FOLD_THRESHOLD) foldOldest() else null
 
         // Exact accounting from DeepSeek's usage chunk. With include_usage=true it's always present;
         // if it's somehow missing we just skip the token panel for this turn rather than guess.
-        usage?.let { emit(ChatEvent.Complete(ledger.record(model, it))) }
+        usage?.let {
+            emit(ChatEvent.Complete(ledger.record(model, it, summaryUsage), summarized = summaryUsage != null))
+        }
     }.flowOn(Dispatchers.IO)
+
+    // Fold the oldest (recent.size - KEEP_RECENT) turns into the running summary and drop them from
+    // the tail. Returns the summarization call's usage so the turn's accounting can include it.
+    private fun foldOldest(): Usage? {
+        val foldCount = recent.size - KEEP_RECENT
+        if (foldCount <= 0) return null
+        val toFold = recent.take(foldCount)
+        val (updated, summaryUsage) = summarize(summary, toFold)
+        summary = updated
+        summarizedCount += foldCount
+        val kept = recent.drop(foldCount)
+        recent.clear()
+        recent.addAll(kept)
+        return summaryUsage
+    }
+
+    // One non-streaming flash call: merge the existing summary + the folded turns into a new summary.
+    private fun summarize(existing: String?, toFold: List<ChatMessage>): Pair<String?, Usage?> {
+        val instruction = buildString {
+            existing?.let { append("Running summary so far:\n").append(it).append("\n\n") }
+            append("New messages to fold into the summary:\n")
+            toFold.forEach { append(it.role).append(": ").append(it.content).append('\n') }
+        }
+        val payload = ChatRequest(
+            model = SUMMARY_MODEL,
+            messages = listOf(
+                ChatMessage(role = "system", content = SUMMARY_SYSTEM_PROMPT),
+                ChatMessage(role = "user", content = instruction)
+            ),
+            maxTokens = 1024,
+            stream = false
+        )
+        val request = Request.Builder()
+            .url(ENDPOINT)
+            .post(json.encodeToString(payload).toRequestBody(JSON_MEDIA))
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
+            val body = json.decodeFromString<ChatResponse>(response.body.string())
+            val text = body.choices.firstOrNull()?.message?.content?.trim()
+            // If the summary call returns nothing usable, keep the existing summary unchanged.
+            return (text?.takeIf { it.isNotBlank() } ?: existing) to body.usage
+        }
+    }
+
+    private fun summaryContext(text: String): String =
+        "Summary of the earlier conversation (older turns were compressed to save tokens):\n$text"
 
     // Map a non-2xx DeepSeek response to an exception. A 400 whose error message mentions the
     // model's maximum context length becomes the distinct [ContextWindowExceededException];
@@ -134,22 +228,3 @@ class WishChatAgent(
 
 /** DeepSeek rejected the request because the prompt exceeds the model's real context window. */
 class ContextWindowExceededException(message: String) : Exception(message)
-
-private fun String.isBulletLine(): Boolean {
-    val t = trimStart()
-    return t.startsWith("-") || t.startsWith("•") || t.startsWith("*")
-}
-
-// Bullet lines in an assistant reply -> addable wishlist items.
-fun parseWishItems(content: String): List<String> =
-    content.lines()
-        .filter { it.isBulletLine() }
-        .map { it.trim().trimStart('-', '•', '*', ' ').trim() }
-        .filter { it.isNotBlank() }
-
-// Conversational text with the bullet lines removed (they render as add buttons instead).
-fun stripWishItems(content: String): String =
-    content.lines()
-        .filterNot { it.isBulletLine() }
-        .joinToString("\n")
-        .trim()
