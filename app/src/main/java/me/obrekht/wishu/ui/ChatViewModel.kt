@@ -377,6 +377,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 prevId = family.getOrNull(idx - 1)?.id,
                 nextId = family.getOrNull(idx + 1)?.id
             )
+            // Other children of this ancestor forked at earlier indices are alternative paths
+            // within our inherited transcript — expose them as pagers too.
+            branches
+                .filter { it.parentBranchId == parentId && it.forkAtCount < branch.forkAtCount }
+                .groupBy { it.forkAtCount }
+                .forEach { (k, children) ->
+                    if (result.containsKey(k)) return@forEach
+                    val altFamily = (listOf(parent) + children).sortedBy { it.id }
+                    result[k] = VersionInfo(
+                        current = 1,
+                        total = altFamily.size,
+                        prevId = null,
+                        nextId = altFamily.getOrNull(1)?.id
+                    )
+                }
             branch = parent
         }
 
