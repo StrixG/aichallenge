@@ -43,6 +43,16 @@ class SettingsRepository(context: Context) {
         prefs.edit().putLong(KEY_ACTIVE_BRANCH, id).apply()
     }
 
+    // Bumped when long-term memory is wiped from Settings, so a live chat session can drop its
+    // in-memory copy (otherwise the still-loaded agent would re-persist it on the next turn).
+    // Not persisted — it's a one-shot in-process signal.
+    private val _longTermClearedAt = MutableStateFlow(0L)
+    val longTermClearedAt: StateFlow<Long> = _longTermClearedAt.asStateFlow()
+
+    fun signalLongTermCleared() {
+        _longTermClearedAt.value = System.currentTimeMillis()
+    }
+
     companion object {
         const val MODEL_DEFAULT = "deepseek-v4-flash"
         private const val KEY_MODEL = "deepseek_model"

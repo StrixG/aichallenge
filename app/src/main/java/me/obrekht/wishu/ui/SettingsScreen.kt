@@ -12,9 +12,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -26,6 +29,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -70,6 +74,8 @@ fun SettingsScreen(
     )
     val selectedModel by viewModel.selectedModel.collectAsState()
     val strategy by viewModel.strategy.collectAsState()
+
+    var showClearMemoryDialog by remember { mutableStateOf(false) }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
@@ -147,7 +153,41 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            SettingsSection(
+                icon = Icons.Rounded.Psychology,
+                title = stringResource(R.string.memory_section_title)
+            ) {
+                DestructiveOption(
+                    label = stringResource(R.string.clear_long_term),
+                    description = stringResource(R.string.clear_long_term_caption),
+                    shape = groupedItemShape(0, 1),
+                    onClick = { showClearMemoryDialog = true }
+                )
+            }
         }
+    }
+
+    if (showClearMemoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearMemoryDialog = false },
+            icon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
+            title = { Text(stringResource(R.string.clear_long_term)) },
+            text = { Text(stringResource(R.string.clear_long_term_dialog)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearMemoryDialog = false
+                    viewModel.clearLongTermMemory()
+                }) {
+                    Text(stringResource(R.string.clear_long_term_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearMemoryDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
     }
 }
 
@@ -200,6 +240,40 @@ private fun groupedItemShape(index: Int, count: Int): RoundedCornerShape {
         bottomStart = if (last) large else small,
         bottomEnd = if (last) large else small
     )
+}
+
+@Composable
+private fun DestructiveOption(
+    label: String,
+    description: String,
+    shape: RoundedCornerShape,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Rounded.DeleteSweep, contentDescription = null)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = label, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+    }
 }
 
 @Composable

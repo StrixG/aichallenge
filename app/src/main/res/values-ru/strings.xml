@@ -27,7 +27,7 @@
     <string name="token_cumulative">Σ %1$s токенов · $%2$s</string>
     <string name="token_cumulative_detail">%1$d ходов · ~%2$s ток./ход</string>
     <string name="chat_summarized">🗜 Старые сообщения свёрнуты в сводку</string>
-    <string name="chat_facts_updated">🧠 Факты обновлены</string>
+    <string name="chat_facts_updated">🧠 Рабочая память обновлена</string>
     <string name="chat_strategy_chip">%1$s</string>
     <string name="cd_select_strategy">Выбрать стратегию контекста</string>
     <string name="cd_regenerate">Сгенерировать ответ заново</string>
@@ -47,4 +47,15 @@
     <string name="strategy_sliding_window">Скользящее окно</string>
     <string name="strategy_sticky_facts">Закреплённые факты</string>
     <string name="strategy_branching">Ветвление</string>
+    <string name="memory_panel_title">Слои памяти</string>
+    <string name="memory_messages">%d сообщ.</string>
+    <string name="memory_empty">—</string>
+    <string name="memory_updated_badge">обновлено</string>
+    <string name="memory_updating">обновление…</string>
+    <string name="memory_section_title">Память</string>
+    <string name="clear_long_term">Очистить долговременную память</string>
+    <string name="clear_long_term_caption">Забыть сохранённый профиль пользователя</string>
+    <string name="clear_long_term_dialog">Навсегда удалит сохранённый профиль пользователя (имя, язык, предпочтения). Текущая сессия чата не затрагивается.</string>
+    <string name="clear_long_term_confirm">Удалить</string>
+    <string name="action_cancel">Отмена</string>
 </resources>

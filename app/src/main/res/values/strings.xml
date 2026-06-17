@@ -27,7 +27,7 @@
     <string name="token_cumulative">Σ %1$s tokens · $%2$s</string>
     <string name="token_cumulative_detail">%1$d turns · ~%2$s tok/turn</string>
     <string name="chat_summarized">🗜 Folded older messages into the summary</string>
-    <string name="chat_facts_updated">🧠 Refreshed the sticky facts</string>
+    <string name="chat_facts_updated">🧠 Working memory updated</string>
     <string name="chat_strategy_chip">%1$s</string>
     <string name="cd_select_strategy">Select context strategy</string>
     <string name="cd_regenerate">Regenerate response</string>
@@ -47,4 +47,18 @@
     <string name="strategy_sliding_window">Sliding window</string>
     <string name="strategy_sticky_facts">Sticky facts</string>
     <string name="strategy_branching">Branching</string>
+    <string name="memory_panel_title">Memory layers</string>
+    <string name="memory_layer_short">SHORT</string>
+    <string name="memory_layer_working">WORK</string>
+    <string name="memory_layer_long">LONG</string>
+    <string name="memory_messages">%d msgs</string>
+    <string name="memory_empty">—</string>
+    <string name="memory_updated_badge">updated</string>
+    <string name="memory_updating">updating…</string>
+    <string name="memory_section_title">Memory</string>
+    <string name="clear_long_term">Clear long-term memory</string>
+    <string name="clear_long_term_caption">Forget the saved user profile</string>
+    <string name="clear_long_term_dialog">This permanently deletes the saved user profile (name, language, preferences). The current chat session is not affected.</string>
+    <string name="clear_long_term_confirm">Delete</string>
+    <string name="action_cancel">Cancel</string>
 </resources>

@@ -135,6 +135,8 @@ enum class AuxKind { NONE, SUMMARY, FACTS }
 /** Streamed agent output: a content delta, or the final per-turn token accounting. */
 sealed interface ChatEvent {
     data class Token(val delta: String) : ChatEvent
+    // Emitted after the reply finishes streaming, while the memory-layer helper calls run.
+    data object MemoryUpdating : ChatEvent
     // `aux` says which helper call (if any) ran this turn: a summary fold or a facts refresh.
     data class Complete(val tokens: TurnTokens, val aux: AuxKind = AuxKind.NONE) : ChatEvent
 }

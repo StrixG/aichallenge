@@ -18,7 +18,8 @@ class ChatHistoryRepository(
     private val dao: ChatMessageDao,
     private val summaryDao: ChatSummaryDao,
     private val factsDao: ChatFactsDao,
-    private val branchDao: ChatBranchDao
+    private val branchDao: ChatBranchDao,
+    private val longTermDao: LongTermMemoryDao
 ) {
 
     // The active branch's effective transcript: the parent chain truncated at each fork point, then
@@ -45,6 +46,24 @@ class ChatHistoryRepository(
 
     suspend fun saveFacts(factsJson: String) =
         factsDao.upsert(ChatFactsEntity(factsJson = factsJson))
+
+    // Long-term memory — persists across session clears (never touched by clear()) ---------------
+
+    suspend fun loadLongTermMemory(): Map<String, String> =
+        longTermDao.getAll().associate { it.key to it.value }
+
+    // Wipe ONLY the persistent long-term profile (Settings "clear memory"). Distinct from clear(),
+    // which wipes the session but deliberately leaves long-term intact.
+    suspend fun clearLongTermMemory() = longTermDao.clear()
+
+    // Replace-all: clear then re-insert so keys the model dropped (or renamed/typo'd) vanish from
+    // the DB. This is the persistence path, NOT the session clear() — long-term still survives that.
+    suspend fun saveAllLongTermFacts(facts: Map<String, String>) {
+        longTermDao.clear()
+        facts.forEach { (key, value) ->
+            longTermDao.upsert(LongTermMemoryEntity(key = key, value = value))
+        }
+    }
 
     // Branch tree ---------------------------------------------------------------------------------
 

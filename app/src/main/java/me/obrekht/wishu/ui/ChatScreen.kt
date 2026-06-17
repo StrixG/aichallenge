@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +52,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,10 +89,21 @@ fun ChatScreen(
         }
     }
 
-    // Keep the newest message in view as it streams in.
+    // Follow the newest tokens only while the user is at the bottom. If they scroll up to read
+    // earlier messages, stop auto-scrolling so the stream doesn't yank them back down.
+    val isAtBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            // Bottom of the last item within the viewport (+ slack to absorb per-token growth).
+            last.index >= info.totalItemsCount - 1 &&
+                last.offset + last.size <= info.viewportEndOffset + 200
+        }
+    }
     LaunchedEffect(uiState.messages.size, uiState.messages.lastOrNull()?.content) {
-        if (uiState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(uiState.messages.lastIndex)
+        if (uiState.messages.isNotEmpty() && isAtBottom) {
+            // Pin to the very bottom of the last item, so following keeps the newest text visible.
+            listState.scrollToItem(uiState.messages.lastIndex, Int.MAX_VALUE)
         }
     }
 
@@ -186,13 +199,22 @@ fun ChatScreen(
                 modifier = Modifier.imePadding(),
                 tonalElevation = 2.dp
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Column {
+                    MemoryLayersPanel(
+                        shortTermCount = uiState.messages.size,
+                        workingMemory = uiState.workingMemory,
+                        longTermMemory = uiState.longTermMemory,
+                        workingChanged = uiState.workingChanged,
+                        longTermChanged = uiState.longTermChanged,
+                        memoryUpdating = uiState.memoryUpdating
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 8.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     TextField(
                         value = uiState.inputText,
                         onValueChange = { viewModel.onInputChange(it) },
@@ -216,6 +238,7 @@ fun ChatScreen(
                             contentDescription = stringResource(R.string.cd_send)
                         )
                     }
+                }
                 }
             }
         }
@@ -279,6 +302,151 @@ fun ChatScreen(
         }
     }
 }
+
+// Collapsible memory layers debug panel: shows what's in each of the three memory layers, and
+// flags which layer changed on the last turn (an "updated" badge + a dot on the collapsed header).
+@Composable
+private fun MemoryLayersPanel(
+    shortTermCount: Int,
+    workingMemory: Map<String, String>,
+    longTermMemory: Map<String, String>,
+    workingChanged: Boolean,
+    longTermChanged: Boolean,
+    memoryUpdating: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val anyChanged = workingChanged || longTermChanged
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            onClick = { expanded = !expanded },
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.memory_panel_title),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    // Visible even when collapsed: spinner while the memory helpers run, then the
+                    // "updated" badge for whichever layer changed.
+                    when {
+                        memoryUpdating -> {
+                            Spacer(Modifier.width(6.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.memory_updating),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        anyChanged -> {
+                            Spacer(Modifier.width(6.dp))
+                            UpdatedBadge()
+                        }
+                    }
+                }
+                Icon(
+                    Icons.Rounded.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        if (expanded) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MemoryLayerRow(
+                        label = stringResource(R.string.memory_layer_short),
+                        content = stringResource(R.string.memory_messages, shortTermCount),
+                        labelColor = MaterialTheme.colorScheme.secondary,
+                        updated = false
+                    )
+                    MemoryLayerRow(
+                        label = stringResource(R.string.memory_layer_working),
+                        content = factsText(workingMemory),
+                        labelColor = MaterialTheme.colorScheme.tertiary,
+                        updated = workingChanged
+                    )
+                    MemoryLayerRow(
+                        label = stringResource(R.string.memory_layer_long),
+                        content = factsText(longTermMemory),
+                        labelColor = MaterialTheme.colorScheme.primary,
+                        updated = longTermChanged
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryLayerRow(label: String, content: String, labelColor: Color, updated: Boolean) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            color = labelColor,
+            contentColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+        Text(
+            text = content,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.weight(1f)
+        )
+        if (updated) UpdatedBadge()
+    }
+}
+
+// Small accent pill that calls out a just-updated layer.
+@Composable
+private fun UpdatedBadge() {
+    Surface(
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary,
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.memory_updated_badge),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+        )
+    }
+}
+
+private fun factsText(facts: Map<String, String>): String =
+    if (facts.isEmpty()) "—"
+    else facts.entries.joinToString(" · ") { "${it.key}: ${it.value}" }
 
 // The active context strategy as a tap-to-switch chip with a dropdown — so a screen recording
 // shows the mode and switches between all four in one place.

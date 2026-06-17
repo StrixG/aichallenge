@@ -13,9 +13,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChatMessageEntity::class,
         ChatSummaryEntity::class,
         ChatFactsEntity::class,
-        ChatBranchEntity::class
+        ChatBranchEntity::class,
+        LongTermMemoryEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class WishDatabase : RoomDatabase() {
@@ -24,6 +25,7 @@ abstract class WishDatabase : RoomDatabase() {
     abstract fun chatSummaryDao(): ChatSummaryDao
     abstract fun chatFactsDao(): ChatFactsDao
     abstract fun chatBranchDao(): ChatBranchDao
+    abstract fun longTermMemoryDao(): LongTermMemoryDao
 
     companion object {
         @Volatile
@@ -75,10 +77,21 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v4 -> v5: memory layers. Add the long_term_memory table (persists across session clears).
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `long_term_memory` " +
+                        "(`key` TEXT PRIMARY KEY NOT NULL, " +
+                        "`value` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): WishDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

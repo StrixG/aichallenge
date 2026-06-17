@@ -48,7 +48,17 @@ data class ChatUiState(
     // Keyed by message index; present only where alternative versions exist (pager shown there).
     val versionGroups: Map<Int, VersionInfo> = emptyMap(),
     // Mirrors the Settings model choice; drives pricing, so it's shown next to the token panel.
-    val model: String = ""
+    val model: String = "",
+    // Memory layers for the debug panel.
+    val workingMemory: Map<String, String> = emptyMap(),
+    val longTermMemory: Map<String, String> = emptyMap(),
+    // True for the layer(s) whose content changed on the last completed turn — drives the
+    // "updated" badge in the memory panel. Reset when the next user turn starts.
+    val workingChanged: Boolean = false,
+    val longTermChanged: Boolean = false,
+    // True while the memory-layer helper calls run (after the reply streamed) — drives the
+    // memory panel's loading spinner.
+    val memoryUpdating: Boolean = false
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -59,7 +69,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         app.database.chatMessageDao(),
         app.database.chatSummaryDao(),
         app.database.chatFactsDao(),
-        app.database.chatBranchDao()
+        app.database.chatBranchDao(),
+        app.database.longTermMemoryDao()
     )
     private val settingsRepository = app.settingsRepository
 
@@ -79,17 +90,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val transcript = chatHistoryRepository.transcript(activeId)
             val savedSummary = chatHistoryRepository.loadSummary()
             val savedFacts = chatHistoryRepository.loadFacts()
+            val savedLongTerm = chatHistoryRepository.loadLongTermMemory()
             agent.restore(
                 history = transcript,
                 summary = savedSummary?.summary,
                 summarizedCount = savedSummary?.summarizedCount ?: 0,
-                factsJson = savedFacts
+                factsToon = savedFacts,
+                longTermFacts = savedLongTerm
             )
+            val mem = agent.memorySnapshot()
             _uiState.update {
                 it.copy(
                     messages = transcript.map(::toUiMessage),
                     activeBranchId = activeId,
-                    versionGroups = computeVersionGroups(activeId, allBranches)
+                    versionGroups = computeVersionGroups(activeId, allBranches),
+                    workingMemory = mem.working,
+                    longTermMemory = mem.longTerm
                 )
             }
         }
@@ -103,6 +119,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             settingsRepository.selectedModel.collect { model ->
                 _uiState.update { it.copy(model = model) }
+            }
+        }
+        // Long-term memory wiped from Settings while this session is alive: drop the agent's in-memory
+        // copy too, or the next turn would re-persist it. (0L is the initial no-op value.)
+        viewModelScope.launch {
+            settingsRepository.longTermClearedAt.collect { ts ->
+                if (ts == 0L) return@collect
+                agent.clearLongTermMemory()
+                _uiState.update { it.copy(longTermMemory = emptyMap(), longTermChanged = false) }
             }
         }
     }
@@ -129,7 +154,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ChatUiMessage(role = "user", content = text) +
                     ChatUiMessage(role = "assistant", content = ""),
                 isStreaming = true,
-                errorMessage = null
+                errorMessage = null,
+                workingChanged = false,
+                longTermChanged = false
             )
         }
 
@@ -144,6 +171,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         is ChatEvent.Token -> _uiState.update { state ->
                             state.copy(messages = appendToLast(state.messages, event.delta))
                         }
+                        ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
                         is ChatEvent.Complete -> {
                             aux = event.aux
                             _uiState.update { state ->
@@ -158,21 +186,30 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val rawReply = _uiState.value.messages.last().content
-                _uiState.update { it.copy(isStreaming = false) }
+                _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
                 chatHistoryRepository.append(branchId, "user", text)
                 chatHistoryRepository.append(branchId, "assistant", rawReply)
                 when (aux) {
                     AuxKind.SUMMARY ->
                         agent.summary?.let { chatHistoryRepository.saveSummary(it, agent.summarizedCount) }
-                    AuxKind.FACTS -> chatHistoryRepository.saveFacts(agent.factsJson)
+                    AuxKind.FACTS -> chatHistoryRepository.saveFacts(agent.factsToon)
                     AuxKind.NONE -> Unit
                 }
+                chatHistoryRepository.saveAllLongTermFacts(agent.longTermFacts)
+                val mem = agent.memorySnapshot()
+                _uiState.update { it.copy(
+                    workingMemory = mem.working,
+                    longTermMemory = mem.longTerm,
+                    workingChanged = mem.working != it.workingMemory,
+                    longTermChanged = mem.longTerm != it.longTermMemory
+                ) }
             } catch (e: ContextWindowExceededException) {
                 _uiState.update { state ->
                     state.copy(
                         messages = state.messages.dropLast(2),
                         inputText = TextFieldValue(text),
                         isStreaming = false,
+                        memoryUpdating = false,
                         errorMessage = app.getString(R.string.error_context_window)
                     )
                 }
@@ -182,6 +219,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         messages = state.messages.dropLast(2),
                         inputText = TextFieldValue(text),
                         isStreaming = false,
+                        memoryUpdating = false,
                         errorMessage = app.getString(R.string.error_chat)
                     )
                 }
@@ -219,7 +257,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     tokenTurns = emptyList(),
                     isStreaming = true,
                     errorMessage = null,
-                    versionGroups = computeVersionGroups(newId, allBranches)
+                    versionGroups = computeVersionGroups(newId, allBranches),
+                    workingChanged = false,
+                    longTermChanged = false
                 )
             }
 
@@ -232,6 +272,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         is ChatEvent.Token -> _uiState.update { s ->
                             s.copy(messages = appendToLast(s.messages, event.delta))
                         }
+                        ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
                         is ChatEvent.Complete -> {
                             aux = event.aux
                             _uiState.update { s ->
@@ -246,19 +287,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val rawReply = _uiState.value.messages.last().content
-                _uiState.update { it.copy(isStreaming = false) }
+                _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
                 chatHistoryRepository.append(newId, "assistant", rawReply)
                 when (aux) {
                     AuxKind.SUMMARY ->
                         agent.summary?.let { chatHistoryRepository.saveSummary(it, agent.summarizedCount) }
-                    AuxKind.FACTS -> chatHistoryRepository.saveFacts(agent.factsJson)
+                    AuxKind.FACTS -> chatHistoryRepository.saveFacts(agent.factsToon)
                     AuxKind.NONE -> Unit
                 }
+                chatHistoryRepository.saveAllLongTermFacts(agent.longTermFacts)
+                val mem = agent.memorySnapshot()
+                _uiState.update { it.copy(
+                    workingMemory = mem.working,
+                    longTermMemory = mem.longTerm,
+                    workingChanged = mem.working != it.workingMemory,
+                    longTermChanged = mem.longTerm != it.longTermMemory
+                ) }
             } catch (e: ContextWindowExceededException) {
                 _uiState.update { s ->
                     s.copy(
                         messages = s.messages.dropLast(1),
                         isStreaming = false,
+                        memoryUpdating = false,
                         errorMessage = app.getString(R.string.error_context_window)
                     )
                 }
@@ -267,6 +317,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     s.copy(
                         messages = s.messages.dropLast(1),
                         isStreaming = false,
+                        memoryUpdating = false,
                         errorMessage = app.getString(R.string.error_chat)
                     )
                 }
@@ -313,13 +364,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     activeBranchId = id,
                     messages = transcript.map(::toUiMessage),
                     tokenTurns = emptyList(),
-                    versionGroups = computeVersionGroups(id, allBranches)
+                    versionGroups = computeVersionGroups(id, allBranches),
+                    workingChanged = false,
+                    longTermChanged = false
                 )
             }
         }
     }
 
-    /** Wipe the whole session: bubbles, persisted history, branches, agent context + token ledger. */
+    /** Wipe the whole session: bubbles, persisted history, branches, agent context + token ledger.
+     *  Long-term memory is intentionally preserved — it's user profile data, not session data. */
     fun clearSession() {
         if (_uiState.value.isStreaming) return
         viewModelScope.launch {
@@ -335,7 +389,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     errorMessage = null,
                     tokenTurns = emptyList(),
                     activeBranchId = ROOT_BRANCH_ID,
-                    versionGroups = emptyMap()
+                    versionGroups = emptyMap(),
+                    workingMemory = emptyMap(),
+                    workingChanged = false,
+                    longTermChanged = false
+                    // longTermMemory stays — it survived the clear
                 )
             }
         }

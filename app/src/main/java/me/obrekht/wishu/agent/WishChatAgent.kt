@@ -5,10 +5,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import me.obrekht.wishu.network.ApiErrorEnvelope
 import me.obrekht.wishu.network.ChatMessage
 import me.obrekht.wishu.network.ChatRequest
@@ -40,31 +36,58 @@ private const val SUMMARY_SYSTEM_PROMPT =
         "and concrete items already proposed. Be terse and factual, no preamble. " +
         "Output only the summary text, in the language the conversation uses."
 
-private const val FACTS_SYSTEM_PROMPT =
+private const val WORKING_MEMORY_PROMPT =
     "You maintain a compact key-value memory of a wishlist brainstorming chat. Given the current " +
-        "facts (a JSON object) and the latest user/assistant exchange, output the UPDATED facts as " +
-        "a single JSON object mapping short snake_case keys to short string values. Capture durable " +
-        "facts only: recipient, occasion, budget, stated likes, dislikes, constraints, and decisions " +
-        "already made. Keep at most ~12 keys; keep everything still relevant. " +
-        "Output ONLY the JSON object — no prose, no code fences."
+        "facts and the latest user/assistant exchange, output the UPDATED facts in TOON " +
+        "(Token-Oriented Object Notation): one 'key: value' per line, short snake_case keys, short " +
+        "single-line string values, no braces/quotes/commas. Capture durable facts only: recipient, " +
+        "occasion, budget, stated likes, dislikes, constraints, and decisions already made. Keep at " +
+        "most ~12 keys; keep everything still relevant. Output ONLY the TOON lines — no prose, no " +
+        "code fences. Example:\nrecipient: mom\noccasion: birthday\nbudget: ~3000 RUB"
+
+private const val LONG_TERM_MEMORY_PROMPT =
+    "You maintain a persistent profile of THE USER (the person chatting), across wishlist " +
+        "conversations. Given the current profile (a JSON object) and the latest user/assistant " +
+        "exchange, output the UPDATED profile as a single JSON object. " +
+        "Use ONLY these keys when the info is known (omit any you don't know): " +
+        "user_name, language, communication_style, typical_budget, user_interests. " +
+        "Definitions: communication_style = how the USER wants replies (e.g. concise, formal); " +
+        "user_interests = the USER's OWN hobbies/tastes. " +
+        "CRITICAL: a gift recipient is NOT the user. A recipient's traits, likes, occasion, or " +
+        "relationship (mom, friend, birthday, their love of gardening) are task data and must NEVER " +
+        "enter this profile. Only record a trait under user_interests if the USER states it about " +
+        "THEMSELVES. If the exchange reveals nothing durable about the user, return the profile " +
+        "unchanged. Output the profile in TOON (Token-Oriented Object Notation): one 'key: value' " +
+        "per line, no braces/quotes/commas. Output ONLY the TOON lines — no prose, no code fences. " +
+        "Example:\nuser_name: Nikita\nlanguage: ru\ncommunication_style: concise"
 
 // Summary: keep the last KEEP_RECENT raw turns verbatim; once the un-folded tail grows past
-// FOLD_THRESHOLD, fold the oldest into the running summary. Sliding Window / Sticky Facts send the
-// last WINDOW messages.
+// FOLD_THRESHOLD, fold the oldest into the running summary. Sliding Window sends the last WINDOW
+// messages; Sticky Facts sends only the last STICKY_WINDOW (leaning on the working-memory layer).
 private const val KEEP_RECENT = 6
 private const val FOLD_THRESHOLD = 10
 private const val WINDOW = KEEP_RECENT
+
+// STICKY_FACTS sends only a tiny raw tail — it leans on the always-on working-memory layer to
+// carry the rest of the context, instead of replaying recent turns verbatim.
+private const val STICKY_WINDOW = 2
 
 /**
  * The agent: owns the active conversation transcript and the DeepSeek request/response logic.
  * Callers only see [send] / [restore] / [loadHistory] / [reset] — never a [ChatRequest].
  *
- * Context management is selected per call via [ContextStrategy], and the agent branches on it in a
- * single `when` (no class hierarchy). It always retains the full active transcript in [history]; the
- * strategies differ only in what slice (plus optional [summary] / [facts]) they put in the request:
+ * Three explicit memory layers, all owned here (see [MemorySnapshot]):
+ *  - Short-term: the active transcript ([history]); in-memory, session-scoped.
+ *  - Working: task-specific key-value [facts]; refreshed every turn, cleared on [reset].
+ *  - Long-term: durable user profile [longTerm]; refreshed every turn, SURVIVES [reset].
+ * Working + long-term are always-on — injected on every request and refreshed every turn,
+ * independent of the [ContextStrategy].
+ *
+ * The [ContextStrategy] is a separate axis: it only decides how the raw transcript is trimmed.
+ * The agent branches on it in a single `when` (no class hierarchy):
  *  - SLIDING_WINDOW: the last [WINDOW] messages.
  *  - SUMMARY: a running summary of the older turns + the un-folded tail.
- *  - STICKY_FACTS: a key-value facts block (refreshed each turn) + the last [WINDOW] messages.
+ *  - STICKY_FACTS: only the last [STICKY_WINDOW] messages (leans on the working-memory layer).
  *  - BRANCHING: the whole transcript (which branch you're on is the context lever, set by [loadHistory]).
  *
  * Everything lives in memory; [restore] / [loadHistory] re-seed it from storage so context survives
@@ -90,21 +113,42 @@ class WishChatAgent(
     var summarizedCount: Int = 0
         private set
 
-    // STICKY_FACTS: key-value memory refreshed after each turn.
+    // Working memory: task-specific key-value facts, refreshed every turn (all strategies).
+    // Serialized as TOON (not JSON) for the helper prompts + storage — fewer tokens for a flat map.
     private val facts = linkedMapOf<String, String>()
-    val factsJson: String get() = JsonObject(facts.mapValues { JsonPrimitive(it.value) }).toString()
+    val factsToon: String get() = Toon.encode(facts)
+
+    // Long-term memory: durable user profile, refreshed every turn, survives session resets.
+    private val longTerm = linkedMapOf<String, String>()
+    val longTermToon: String get() = Toon.encode(longTerm)
+    val longTermFacts: Map<String, String> get() = longTerm.toMap()
+
+    /** A read-only snapshot of all three memory layers, for the chat's memory panel. */
+    fun memorySnapshot(): MemorySnapshot =
+        MemorySnapshot(shortTerm = history.toList(), working = facts.toMap(), longTerm = longTerm.toMap())
+
+    /** Drop the in-memory long-term profile (e.g. after it's wiped from Settings). */
+    fun clearLongTermMemory() = longTerm.clear()
 
     // Running token accounting across the dialog (resets each session, like the conversation).
     val ledger = TokenLedger()
 
     /** Re-seed the full session state from storage. */
-    fun restore(history: List<ChatMessage>, summary: String?, summarizedCount: Int, factsJson: String?) {
+    fun restore(
+        history: List<ChatMessage>,
+        summary: String?,
+        summarizedCount: Int,
+        factsToon: String?,
+        longTermFacts: Map<String, String> = emptyMap()
+    ) {
         this.history.clear()
         this.history.addAll(history)
         this.summary = summary
         this.summarizedCount = summarizedCount
         facts.clear()
-        factsJson?.let { facts.putAll(parseFacts(it)) }
+        factsToon?.let { facts.putAll(Toon.decode(it)) }
+        longTerm.clear()
+        longTerm.putAll(longTermFacts)
     }
 
     /** Swap the active transcript (Branching: switching to another branch's line). */
@@ -113,13 +157,15 @@ class WishChatAgent(
         this.history.addAll(history)
     }
 
-    /** Wipe the conversation back to a fresh session. */
+    /** Wipe the conversation back to a fresh session. Long-term memory is NOT cleared — it's user
+     *  profile data, not session data. */
     fun reset() {
         history.clear()
         summary = null
         summarizedCount = 0
         facts.clear()
         ledger.clear()
+        // longTerm intentionally preserved — persists across session resets
     }
 
     /**
@@ -137,18 +183,17 @@ class WishChatAgent(
         // successful reply, so a rejected request never leaves a dangling turn behind.
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
+            // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
+            if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
+            if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
                 ContextStrategy.SUMMARY -> {
                     summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
                     addAll(history.drop(summarizedCount))
                 }
                 ContextStrategy.SLIDING_WINDOW -> addAll(history.takeLast(WINDOW))
-                ContextStrategy.STICKY_FACTS -> {
-                    if (facts.isNotEmpty()) {
-                        add(ChatMessage(role = "system", content = factsContext()))
-                    }
-                    addAll(history.takeLast(WINDOW))
-                }
+                ContextStrategy.STICKY_FACTS -> addAll(history.takeLast(STICKY_WINDOW))
                 ContextStrategy.BRANCHING -> addAll(history)
             }
             add(userTurn)
@@ -188,14 +233,17 @@ class WishChatAgent(
         history.add(userTurn)
         history.add(ChatMessage(role = "assistant", content = full.toString()))
 
-        // The strategy's optional helper call, run only after a successful reply.
+        // Always-on memory layers refresh every turn (all strategies). Long-term is background/untracked.
+        // These are blocking helper LLM calls — signal the UI so it can show a memory-updating spinner.
+        emit(ChatEvent.MemoryUpdating)
+        val workingUsage = refreshWorkingMemory(userTurn.content, full.toString())
+        refreshLongTermMemory(userTurn.content, full.toString())
+
+        // Headline helper call shown in the token panel: the SUMMARY fold, else the working refresh.
         var auxKind = AuxKind.NONE
         val auxUsage: Usage? = when (strategy) {
-            ContextStrategy.SUMMARY ->
-                foldOldest()?.also { auxKind = AuxKind.SUMMARY }
-            ContextStrategy.STICKY_FACTS ->
-                refreshFacts(userTurn.content, full.toString())?.also { auxKind = AuxKind.FACTS }
-            else -> null
+            ContextStrategy.SUMMARY -> foldOldest()?.also { auxKind = AuxKind.SUMMARY }
+            else -> workingUsage?.also { auxKind = AuxKind.FACTS }
         }
 
         // Exact accounting from DeepSeek's usage chunk. With include_usage=true it's always present;
@@ -214,18 +262,17 @@ class WishChatAgent(
     fun regenerate(model: String, strategy: ContextStrategy): Flow<ChatEvent> = flow {
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
+            // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
+            if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
+            if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
                 ContextStrategy.SUMMARY -> {
                     summary?.let { add(ChatMessage(role = "system", content = summaryContext(it))) }
                     addAll(history.drop(summarizedCount))
                 }
                 ContextStrategy.SLIDING_WINDOW -> addAll(history.takeLast(WINDOW))
-                ContextStrategy.STICKY_FACTS -> {
-                    if (facts.isNotEmpty()) {
-                        add(ChatMessage(role = "system", content = factsContext()))
-                    }
-                    addAll(history.takeLast(WINDOW))
-                }
+                ContextStrategy.STICKY_FACTS -> addAll(history.takeLast(STICKY_WINDOW))
                 ContextStrategy.BRANCHING -> addAll(history)
             }
             // No add(userTurn) — history already ends with the user turn to answer.
@@ -264,14 +311,18 @@ class WishChatAgent(
         // Only the assistant turn is committed; the user turn is already in history.
         history.add(ChatMessage(role = "assistant", content = full.toString()))
 
+        // Always-on memory layers refresh every turn (all strategies). Long-term is background/untracked.
+        // These are blocking helper LLM calls — signal the UI so it can show a memory-updating spinner.
+        emit(ChatEvent.MemoryUpdating)
+        val userText = history.dropLast(1).last().content
+        val workingUsage = refreshWorkingMemory(userText, full.toString())
+        refreshLongTermMemory(userText, full.toString())
+
+        // Headline helper call shown in the token panel: the SUMMARY fold, else the working refresh.
         var auxKind = AuxKind.NONE
         val auxUsage: Usage? = when (strategy) {
-            ContextStrategy.SUMMARY ->
-                foldOldest()?.also { auxKind = AuxKind.SUMMARY }
-            ContextStrategy.STICKY_FACTS ->
-                refreshFacts(history.dropLast(1).last().content, full.toString())
-                    ?.also { auxKind = AuxKind.FACTS }
-            else -> null
+            ContextStrategy.SUMMARY -> foldOldest()?.also { auxKind = AuxKind.SUMMARY }
+            else -> workingUsage?.also { auxKind = AuxKind.FACTS }
         }
 
         usage?.let {
@@ -292,23 +343,46 @@ class WishChatAgent(
         return summaryUsage
     }
 
-    // STICKY_FACTS: merge the latest exchange into the key-value facts via one flash call.
-    private fun refreshFacts(userText: String, assistantText: String): Usage? {
+    // Working memory: merge the latest exchange into the task-specific key-value facts. Runs every
+    // turn on every strategy; the returned usage is metered as the headline aux on non-SUMMARY turns.
+    private fun refreshWorkingMemory(userText: String, assistantText: String): Usage? {
         val instruction = buildString {
-            append("Current facts:\n").append(factsJson).append("\n\n")
+            append("Current facts (TOON):\n").append(factsToon).append("\n\n")
             append("Latest exchange:\n")
             append("user: ").append(userText).append('\n')
             append("assistant: ").append(assistantText).append('\n')
         }
-        val (text, usage) = helperCall(FACTS_SYSTEM_PROMPT, instruction)
+        val (text, usage) = helperCall(WORKING_MEMORY_PROMPT, instruction)
         text?.let {
-            val parsed = parseFacts(it)
+            val parsed = Toon.decode(it)
             if (parsed.isNotEmpty()) {
                 facts.clear()
                 facts.putAll(parsed)
             }
         }
         return usage
+    }
+
+    // Long-term memory: extract durable user-level facts from the exchange into the persistent profile.
+    // Runs on every turn regardless of context strategy. Errors are swallowed — a failed extraction
+    // must not abort the turn.
+    private fun refreshLongTermMemory(userText: String, assistantText: String) {
+        runCatching {
+            val instruction = buildString {
+                append("Current long-term profile (TOON):\n").append(longTermToon).append("\n\n")
+                append("Latest exchange:\n")
+                append("user: ").append(userText).append('\n')
+                append("assistant: ").append(assistantText).append('\n')
+            }
+            val (text, _) = helperCall(LONG_TERM_MEMORY_PROMPT, instruction)
+            text?.let {
+                val parsed = Toon.decode(it)
+                if (parsed.isNotEmpty()) {
+                    longTerm.clear()
+                    longTerm.putAll(parsed)
+                }
+            }
+        }
     }
 
     // One non-streaming flash call: merge the existing summary + the folded turns into a new summary.
@@ -349,20 +423,13 @@ class WishChatAgent(
         "Summary of the earlier conversation (older turns were compressed to save tokens):\n$text"
 
     private fun factsContext(): String = buildString {
-        append("Known facts about this conversation (carried across the whole chat):\n")
+        append("Working memory — current task context (cleared each session):\n")
         facts.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
     }
 
-    // Parse a JSON object of string values, tolerating code fences / surrounding prose by slicing
-    // from the first '{' to the last '}'. Returns empty on any failure (caller keeps prior facts).
-    private fun parseFacts(raw: String): Map<String, String> {
-        val start = raw.indexOf('{')
-        val end = raw.lastIndexOf('}')
-        if (start < 0 || end <= start) return emptyMap()
-        return runCatching {
-            json.parseToJsonElement(raw.substring(start, end + 1)).jsonObject
-                .mapValues { it.value.jsonPrimitive.content }
-        }.getOrDefault(emptyMap())
+    private fun longTermContext(): String = buildString {
+        append("Long-term memory — persistent user profile (remembered across sessions):\n")
+        longTerm.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
     }
 
     // Map a non-2xx DeepSeek response to an exception. A 400 whose error message mentions the
