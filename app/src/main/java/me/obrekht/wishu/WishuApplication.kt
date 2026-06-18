@@ -1,7 +1,7 @@
 package me.obrekht.wishu
 
 import android.app.Application
-import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import me.obrekht.wishu.data.SettingsRepository
 import me.obrekht.wishu.data.WishDatabase
