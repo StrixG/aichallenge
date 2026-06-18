@@ -175,7 +175,8 @@ class WishChatAgent(
     fun send(
         userMessage: String,
         model: String,
-        strategy: ContextStrategy
+        strategy: ContextStrategy,
+        profile: UserProfile = UserProfile.EMPTY
     ): Flow<ChatEvent> = flow {
         val userTurn = ChatMessage(role = "user", content = userMessage)
 
@@ -183,6 +184,9 @@ class WishChatAgent(
         // successful reply, so a rejected request never leaves a dangling turn behind.
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
+            // Declared user profile — what the user explicitly told us to do (Settings). Sits above
+            // the learned long-term memory so stated preferences win.
+            if (!profile.isEmpty) add(ChatMessage(role = "system", content = profileContext(profile)))
             // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
             if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
@@ -214,7 +218,7 @@ class WishChatAgent(
         val full = StringBuilder()
         var usage: Usage? = null
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
+            if (!response.isSuccessful) throw mapApiError(response.code, response.body.string())
             val source = response.body.source()
             while (!source.exhausted()) {
                 val line = source.readUtf8Line() ?: break
@@ -259,9 +263,15 @@ class WishChatAgent(
      * and loaded the transcript (ending with the user turn) via [loadHistory]. Unlike [send], this
      * does not append a user turn; it only appends the assistant reply.
      */
-    fun regenerate(model: String, strategy: ContextStrategy): Flow<ChatEvent> = flow {
+    fun regenerate(
+        model: String,
+        strategy: ContextStrategy,
+        profile: UserProfile = UserProfile.EMPTY
+    ): Flow<ChatEvent> = flow {
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
+            // Declared user profile — see [send]; kept identical so a regenerate honors it too.
+            if (!profile.isEmpty) add(ChatMessage(role = "system", content = profileContext(profile)))
             // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
             if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
@@ -293,7 +303,7 @@ class WishChatAgent(
         val full = StringBuilder()
         var usage: Usage? = null
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
+            if (!response.isSuccessful) throw mapApiError(response.code, response.body.string())
             val source = response.body.source()
             while (!source.exhausted()) {
                 val line = source.readUtf8Line() ?: break
@@ -413,7 +423,7 @@ class WishChatAgent(
             .post(json.encodeToString(payload).toRequestBody(JSON_MEDIA))
             .build()
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw mapApiError(response.code, response.body?.string().orEmpty())
+            if (!response.isSuccessful) throw mapApiError(response.code, response.body.string())
             val body = json.decodeFromString<ChatResponse>(response.body.string())
             return body.choices.firstOrNull()?.message?.content?.trim() to body.usage
         }
@@ -430,6 +440,28 @@ class WishChatAgent(
     private fun longTermContext(): String = buildString {
         append("Long-term memory — persistent user profile (remembered across sessions):\n")
         longTerm.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
+    }
+
+    // The user's *declared* preferences (set in Settings). Only set fields become instruction
+    // lines; DEFAULT/blank are omitted so they don't constrain the model.
+    private fun profileContext(p: UserProfile): String = buildString {
+        append("User profile — declared preferences, honor these:\n")
+        if (p.name.isNotBlank()) append("- Address the user as ").append(p.name).append('\n')
+        when (p.style) {
+            ReplyStyle.DEFAULT -> {}
+            ReplyStyle.CONCISE -> append("- Style: keep replies concise and to the point\n")
+            ReplyStyle.DETAILED -> append("- Style: give thorough, detailed replies with reasoning\n")
+            ReplyStyle.FORMAL -> append("- Style: use a formal, professional tone\n")
+            ReplyStyle.PLAYFUL -> append("- Style: use a warm, playful, casual tone\n")
+        }
+        when (p.format) {
+            ReplyFormat.DEFAULT -> {}
+            ReplyFormat.BULLETS -> append("- Format: present ideas as short bullet-point lists\n")
+            ReplyFormat.PROSE -> append("- Format: write in flowing prose paragraphs, not lists\n")
+        }
+        if (p.constraints.isNotBlank()) {
+            append("- Constraints: ").append(p.constraints.replace('\n', ' ')).append('\n')
+        }
     }
 
     // Map a non-2xx DeepSeek response to an exception. A 400 whose error message mentions the

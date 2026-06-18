@@ -58,4 +58,20 @@
     <string name="clear_long_term_dialog">Навсегда удалит сохранённый профиль пользователя (имя, язык, предпочтения). Текущая сессия чата не затрагивается.</string>
     <string name="clear_long_term_confirm">Удалить</string>
     <string name="action_cancel">Отмена</string>
+
+    <!-- Day 12: declared user profile (personalization) -->
+    <string name="profile_label">Профиль</string>
+    <string name="profile_name_label">Ваше имя</string>
+    <string name="profile_style_label">Стиль ответов</string>
+    <string name="profile_style_default">Без предпочтений</string>
+    <string name="profile_style_concise">Кратко</string>
+    <string name="profile_style_detailed">Подробно</string>
+    <string name="profile_style_formal">Формально</string>
+    <string name="profile_style_playful">Непринуждённо</string>
+    <string name="profile_format_label">Формат ответов</string>
+    <string name="profile_format_default">Без предпочтений</string>
+    <string name="profile_format_bullets">Списком</string>
+    <string name="profile_format_prose">Абзацами</string>
+    <string name="profile_constraints_label">Ограничения</string>
+    <string name="profile_constraints_hint">напр. бюджет до 3000 ₽; без электроники</string>
 </resources>

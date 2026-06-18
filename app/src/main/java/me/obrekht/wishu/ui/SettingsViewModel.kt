@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import me.obrekht.wishu.WishuApplication
 import me.obrekht.wishu.agent.ContextStrategy
+import me.obrekht.wishu.agent.UserProfile
 import me.obrekht.wishu.data.ChatHistoryRepository
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
@@ -28,6 +29,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val strategy: StateFlow<ContextStrategy> = settingsRepository.strategy
 
     fun setStrategy(strategy: ContextStrategy) = settingsRepository.setStrategy(strategy)
+
+    // Declared user profile — the user's explicit preferences, injected into every request.
+    val profile: StateFlow<UserProfile> = settingsRepository.profile
+
+    fun updateProfile(transform: (UserProfile) -> UserProfile) =
+        settingsRepository.setProfile(transform(settingsRepository.profile.value))
 
     /** Wipe the persistent long-term profile and signal any live chat session to drop its copy. */
     fun clearLongTermMemory() {

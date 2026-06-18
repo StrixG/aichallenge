@@ -61,4 +61,20 @@
     <string name="clear_long_term_dialog">This permanently deletes the saved user profile (name, language, preferences). The current chat session is not affected.</string>
     <string name="clear_long_term_confirm">Delete</string>
     <string name="action_cancel">Cancel</string>
+
+    <!-- Day 12: declared user profile (personalization) -->
+    <string name="profile_label">Profile</string>
+    <string name="profile_name_label">Your name</string>
+    <string name="profile_style_label">Reply style</string>
+    <string name="profile_style_default">No preference</string>
+    <string name="profile_style_concise">Concise</string>
+    <string name="profile_style_detailed">Detailed</string>
+    <string name="profile_style_formal">Formal</string>
+    <string name="profile_style_playful">Playful</string>
+    <string name="profile_format_label">Reply format</string>
+    <string name="profile_format_default">No preference</string>
+    <string name="profile_format_bullets">Bullet points</string>
+    <string name="profile_format_prose">Paragraphs</string>
+    <string name="profile_constraints_label">Constraints</string>
+    <string name="profile_constraints_hint">e.g. budget under 3000 RUB; no electronics</string>
 </resources>

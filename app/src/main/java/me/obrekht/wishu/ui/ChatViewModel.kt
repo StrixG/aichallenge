@@ -165,8 +165,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val model = settingsRepository.selectedModel.value
                 val strategy = settingsRepository.strategy.value
+                val profile = settingsRepository.profile.value
                 var aux = AuxKind.NONE
-                agent.send(text, model, strategy).collect { event ->
+                agent.send(text, model, strategy, profile).collect { event ->
                     when (event) {
                         is ChatEvent.Token -> _uiState.update { state ->
                             state.copy(messages = appendToLast(state.messages, event.delta))
@@ -266,8 +267,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val model = settingsRepository.selectedModel.value
                 val strategy = settingsRepository.strategy.value
+                val profile = settingsRepository.profile.value
                 var aux = AuxKind.NONE
-                agent.regenerate(model, strategy).collect { event ->
+                agent.regenerate(model, strategy, profile).collect { event ->
                     when (event) {
                         is ChatEvent.Token -> _uiState.update { s ->
                             s.copy(messages = appendToLast(s.messages, event.delta))

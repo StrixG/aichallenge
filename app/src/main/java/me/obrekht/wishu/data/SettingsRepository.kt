@@ -5,6 +5,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import me.obrekht.wishu.agent.ContextStrategy
+import me.obrekht.wishu.agent.ReplyFormat
+import me.obrekht.wishu.agent.ReplyStyle
+import me.obrekht.wishu.agent.UserProfile
 
 class SettingsRepository(context: Context) {
 
@@ -43,6 +46,29 @@ class SettingsRepository(context: Context) {
         prefs.edit().putLong(KEY_ACTIVE_BRANCH, id).apply()
     }
 
+    // The user's declared preferences (display name, reply style/format, free-text constraints).
+    // Injected into every request alongside the agent's auto-learned long-term memory. Stored as
+    // four flat prefs keys; enums by name.
+    private val _profile = MutableStateFlow(
+        UserProfile(
+            name = prefs.getString(KEY_PROFILE_NAME, "").orEmpty(),
+            style = ReplyStyle.fromName(prefs.getString(KEY_PROFILE_STYLE, null)),
+            format = ReplyFormat.fromName(prefs.getString(KEY_PROFILE_FORMAT, null)),
+            constraints = prefs.getString(KEY_PROFILE_CONSTRAINTS, "").orEmpty()
+        )
+    )
+    val profile: StateFlow<UserProfile> = _profile.asStateFlow()
+
+    fun setProfile(profile: UserProfile) {
+        _profile.value = profile
+        prefs.edit()
+            .putString(KEY_PROFILE_NAME, profile.name)
+            .putString(KEY_PROFILE_STYLE, profile.style.name)
+            .putString(KEY_PROFILE_FORMAT, profile.format.name)
+            .putString(KEY_PROFILE_CONSTRAINTS, profile.constraints)
+            .apply()
+    }
+
     // Bumped when long-term memory is wiped from Settings, so a live chat session can drop its
     // in-memory copy (otherwise the still-loaded agent would re-persist it on the next turn).
     // Not persisted — it's a one-shot in-process signal.
@@ -58,5 +84,9 @@ class SettingsRepository(context: Context) {
         private const val KEY_MODEL = "deepseek_model"
         private const val KEY_STRATEGY = "context_strategy"
         private const val KEY_ACTIVE_BRANCH = "active_branch_id"
+        private const val KEY_PROFILE_NAME = "profile_name"
+        private const val KEY_PROFILE_STYLE = "profile_style"
+        private const val KEY_PROFILE_FORMAT = "profile_format"
+        private const val KEY_PROFILE_CONSTRAINTS = "profile_constraints"
     }
 }

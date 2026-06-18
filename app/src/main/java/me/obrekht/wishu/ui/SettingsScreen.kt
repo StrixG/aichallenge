@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -25,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -49,6 +51,8 @@ import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import me.obrekht.wishu.R
 import me.obrekht.wishu.agent.ContextStrategy
+import me.obrekht.wishu.agent.ReplyFormat
+import me.obrekht.wishu.agent.ReplyStyle
 
 private data class LanguageOption(val tag: String, val label: String)
 private data class ModelOption(val id: String, val label: String)
@@ -74,6 +78,7 @@ fun SettingsScreen(
     )
     val selectedModel by viewModel.selectedModel.collectAsState()
     val strategy by viewModel.strategy.collectAsState()
+    val profile by viewModel.profile.collectAsState()
 
     var showClearMemoryDialog by remember { mutableStateOf(false) }
 
@@ -103,6 +108,59 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            SettingsSection(
+                icon = Icons.Rounded.Person,
+                title = stringResource(R.string.profile_label)
+            ) {
+                OutlinedTextField(
+                    value = profile.name,
+                    onValueChange = { name -> viewModel.updateProfile { it.copy(name = name) } },
+                    label = { Text(stringResource(R.string.profile_name_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = stringResource(R.string.profile_style_label),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 8.dp)
+                )
+                val styles = ReplyStyle.entries
+                styles.forEachIndexed { index, option ->
+                    SelectableOption(
+                        label = stringResource(replyStyleLabel(option)),
+                        selected = profile.style == option,
+                        shape = groupedItemShape(index, styles.size),
+                        onSelect = { viewModel.updateProfile { it.copy(style = option) } }
+                    )
+                }
+                Text(
+                    text = stringResource(R.string.profile_format_label),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, top = 8.dp)
+                )
+                val formats = ReplyFormat.entries
+                formats.forEachIndexed { index, option ->
+                    SelectableOption(
+                        label = stringResource(replyFormatLabel(option)),
+                        selected = profile.format == option,
+                        shape = groupedItemShape(index, formats.size),
+                        onSelect = { viewModel.updateProfile { it.copy(format = option) } }
+                    )
+                }
+                OutlinedTextField(
+                    value = profile.constraints,
+                    onValueChange = { c -> viewModel.updateProfile { it.copy(constraints = c) } },
+                    label = { Text(stringResource(R.string.profile_constraints_label)) },
+                    placeholder = { Text(stringResource(R.string.profile_constraints_hint)) },
+                    minLines = 2,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                )
+            }
+
             SettingsSection(
                 icon = Icons.Rounded.Language,
                 title = stringResource(R.string.language_label)
@@ -196,6 +254,20 @@ private fun strategyLabel(strategy: ContextStrategy): Int = when (strategy) {
     ContextStrategy.SLIDING_WINDOW -> R.string.strategy_sliding_window
     ContextStrategy.STICKY_FACTS -> R.string.strategy_sticky_facts
     ContextStrategy.BRANCHING -> R.string.strategy_branching
+}
+
+private fun replyStyleLabel(style: ReplyStyle): Int = when (style) {
+    ReplyStyle.DEFAULT -> R.string.profile_style_default
+    ReplyStyle.CONCISE -> R.string.profile_style_concise
+    ReplyStyle.DETAILED -> R.string.profile_style_detailed
+    ReplyStyle.FORMAL -> R.string.profile_style_formal
+    ReplyStyle.PLAYFUL -> R.string.profile_style_playful
+}
+
+private fun replyFormatLabel(format: ReplyFormat): Int = when (format) {
+    ReplyFormat.DEFAULT -> R.string.profile_format_default
+    ReplyFormat.BULLETS -> R.string.profile_format_bullets
+    ReplyFormat.PROSE -> R.string.profile_format_prose
 }
 
 @Composable
