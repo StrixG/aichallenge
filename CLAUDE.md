@@ -33,19 +33,43 @@ Navigation: three Compose destinations (`wishlist`, `chat`, `settings`) in a `Na
 
 ### The AI core — the chat agent
 
-`agent/WishChatAgent` is the single generation path against the DeepSeek `chat/completions` endpoint. It is a self-contained **agent**: it owns the multi-turn conversation history (in memory, not persisted) and all request/response logic — callers only see `send(userMessage, model): Flow<String>` and `transcript`, never a `ChatRequest`. The system prompt (a Kotlin constant, `CHAT_SYSTEM_PROMPT`) asks for concise brainstorming of wishlist/gift ideas, concrete items as `- ` bullet lines, and "reply in the same language as the user's most recent message" — so output follows whatever the user types.
+`agent/WishChatAgent` is the single generation path against the DeepSeek `chat/completions` endpoint. It is a self-contained **agent**: it owns the active transcript and all request/response logic — callers see `send` / `regenerate` / `restore` / `loadHistory` / `reset`, never a `ChatRequest`. The system prompt (`CHAT_SYSTEM_PROMPT`) asks for concise wishlist/gift brainstorming and "reply in the same language as the user's most recent message" — so output follows whatever the user types.
 
-Responses **stream** token-by-token (SSE): `stream=true`, parsed line-by-line (`data: {…}` … `data: [DONE]`) via OkHttp. Because the debug `httpClient` attaches a BODY-level network logging interceptor that buffers the whole body, the agent uses a separate `WishuApplication.streamingHttpClient` (same auth/retry/timeouts, no body logging). `ChatViewModel` collects the flow into an `assistant` `ChatUiMessage`, then `parseWishItems(content)` turns bullet lines into per-item "add to wishlist" buttons (write via `WishRepository.addWish`). Errors surface as `R.string.error_chat`.
+Responses **stream** token-by-token (SSE): `stream=true` + `stream_options.include_usage`, parsed line-by-line (`data: {…}` … `data: [DONE]`) via OkHttp. `send`/`regenerate` return `Flow<ChatEvent>` — `Token(delta)` per chunk, `MemoryUpdating` before the post-turn helper calls, then one `Complete(tokens, aux)`. Because the debug `httpClient` attaches a BODY-level logging interceptor that buffers the whole body, the agent uses a separate `WishuApplication.streamingHttpClient` (same auth/retry/timeouts, no body logging). `ChatViewModel` collects tokens into an `assistant` `ChatUiMessage`, then `parseWishItems(content)` turns bullet lines into per-item "add to wishlist" buttons (write via `WishRepository.addWish`). Errors surface as `R.string.error_chat`; a 400 mentioning "maximum context length" maps to a distinct `ContextWindowExceededException`.
 
-The chat is reached from the wishlist top-bar AutoAwesome button (`onOpenChat` → `navigate("chat")`); history lives only for the session.
+The turn is committed to `history` only **after** a successful reply, so a rejected request leaves no dangling turn.
+
+**Three memory layers** (`MemorySnapshot`, rendered in the chat's memory panel), all owned by the agent and orthogonal to the context strategy:
+- **Short-term** — the raw transcript (`history`); in-memory, session-scoped.
+- **Working** — task-specific key-value `facts` (recipient, budget, likes…); refreshed every turn, cleared on `reset()`.
+- **Long-term** — durable user profile; refreshed every turn, **survives `reset()`** (it's user data, not session data), persisted in Room.
+
+Working + long-term are **always-on**: injected as system messages on every request and refreshed every turn via a cheap non-streaming `SUMMARY_MODEL` (`deepseek-v4-flash`) helper call. Working memory and the long-term profile are serialized as **TOON** (`agent/Toon.kt`) — flat `key: value` lines, no braces/quotes/commas, fewer tokens than JSON for the helper prompts; the DeepSeek wire format stays JSON. The long-term prompt is carefully scoped to record only facts about *the user*, never the gift recipient.
+
+**Context strategy** (`ContextStrategy`, separate axis — only decides how the raw transcript is trimmed; agent branches in a single `when`, no class hierarchy), default `SLIDING_WINDOW`:
+- `SLIDING_WINDOW` — last N messages, no extra call.
+- `SUMMARY` — running prose summary of folded-away older turns (folded via a flash call once the un-folded tail outgrows the threshold) + the recent raw tail.
+- `STICKY_FACTS` — only the last 2 messages, leaning on the always-on working-memory layer.
+- `BRANCHING` — the active branch's full transcript; context is managed by *which* branch you're on. Branches form a tree (`chat_branches`): a child truncates its parent's transcript at `forkAtCount`, then appends its own messages. `ChatScreen` exposes earlier forks as a version pager.
+
+`UserProfile` (`agent/UserProfile.kt`) is the user's **declared** preferences (name, `ReplyStyle`, `ReplyFormat`, free-text constraints) set in Settings — distinct from the *inferred* long-term memory. Passed per-call (agent stays stateless about it) and injected above the learned profile so stated preferences win; an empty profile costs no tokens.
+
+`TokenLedger` (`agent/TokenAccounting.kt`) records exact per-turn usage from DeepSeek's `usage` chunk (main call + the headline `aux` helper call — the SUMMARY fold or the working refresh); resets each session.
+
+`ChatHistoryRepository` persists transcript (per branch), summary, sticky facts, branch tree, and long-term memory so context survives an app restart and branch switches; `restore`/`loadHistory` re-seed the agent from it. The chat is reached from the wishlist top-bar AutoAwesome button (`onOpenChat` → `navigate("chat")`).
 
 ### Locale handling
 
-Language is **not** stored in `SettingsRepository`. It uses AndroidX per-app locales: `AppCompatDelegate.setApplicationLocales(...)` in `SettingsScreen`, persisted automatically via the `autoStoreLocales` `AppLocalesMetadataHolderService` in the manifest and `@xml/locale_config`. `SettingsRepository` only persists the selected DeepSeek model (SharedPreferences).
+Language is **not** stored in `SettingsRepository`. It uses AndroidX per-app locales: `AppCompatDelegate.setApplicationLocales(...)` in `SettingsScreen`, persisted automatically via the `autoStoreLocales` `AppLocalesMetadataHolderService` in the manifest and `@xml/locale_config`. `SettingsRepository` (SharedPreferences) persists the selected DeepSeek model, the `ContextStrategy`, the active branch id, and the declared `UserProfile`. It also exposes a non-persisted `longTermClearedAt` signal so a live chat session drops its in-memory long-term copy when memory is wiped from Settings (otherwise the still-loaded agent re-persists it next turn).
 
 ### Data
 
-Room (`Wish` entity, `WishDao`, `WishDatabase` v1, `exportSchema=false`). Wishlist is observed as a `Flow` collected into UI state.
+Room (`WishDatabase`, currently **v5**, `exportSchema=false`) with explicit migrations 1→5 — never destructive, each adds a table:
+- v1 `wishes` (`Wish`/`WishDao`) — wishlist, observed as a `Flow` into UI state.
+- v2 `chat_messages` — persisted transcript (gains a `branchId` in v4).
+- v3 `chat_summary` — single-row running summary for the SUMMARY strategy.
+- v4 `chat_branches` (root branch seeded) + `chat_facts` — branch tree + sticky working-memory facts.
+- v5 `long_term_memory` — persistent user profile (untouched by session clear).
 
 ## Conventions
 

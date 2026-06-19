@@ -1,21 +1,25 @@
 # Wishu
 
-Android wishlist app with AI-powered idea generation via DeepSeek.
+Android wishlist app with AI-powered idea generation via DeepSeek. Personal learning project exploring on-device AI agent patterns.
 
 ## Features
 
 - Add, view, and delete wishlist items
-- Generate wish ideas with DeepSeek AI (responds in user's language)
-- Persistent local storage with Room
+- AI chat agent — streaming, multi-turn, with bullet ideas auto-convertible to wishlist items
+- Four context-management strategies: Sliding Window, Summary, Sticky Facts, Branching
+- Three-layer agent memory: long-term (persisted), facts (auto-extracted), short-term (session)
+- Declared user profile: name, reply style, reply format, free-text constraints
+- Per-turn token & cost accounting from DeepSeek's exact usage (main + memory helper calls)
+- Two models: DeepSeek V4 Flash and V4 Pro
 - Language setting (System default / English / Russian)
 
 ## Tech Stack
 
-- **UI:** Jetpack Compose + Material 3
-- **Architecture:** ViewModel + StateFlow
-- **Database:** Room
-- **Network:** Retrofit + kotlinx.serialization
-- **AI:** DeepSeek API (`deepseek-v4-flash`)
+- **UI:** Jetpack Compose + Material 3 Expressive
+- **Architecture:** ViewModel + StateFlow, single immutable `UiState` per screen
+- **Database:** Room (wishlist + persisted chat history and long-term memory)
+- **Network:** Retrofit 3 + OkHttp 5 + kotlinx.serialization, streaming via SSE
+- **AI:** DeepSeek API (OpenAI-compatible)
 - **Min SDK:** 26
 
 ## Setup
@@ -31,8 +35,9 @@ Android wishlist app with AI-powered idea generation via DeepSeek.
 
 ```
 app/src/main/java/me/obrekht/wishu/
-├── data/           # Room entities, DAO, database, repository
-├── network/        # DeepSeek API client and models
-├── ui/             # Compose screens and ViewModel
+├── agent/          # Chat agent, context strategies, memory layers, user profile
+├── data/           # Room entities, DAOs, database, repositories
+├── network/        # DeepSeek API models and interface
+├── ui/             # Compose screens and ViewModels
 └── WishuApplication.kt
 ```
