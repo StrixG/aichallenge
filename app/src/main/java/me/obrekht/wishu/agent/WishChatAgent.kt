@@ -188,7 +188,10 @@ class WishChatAgent(
             // the learned long-term memory so stated preferences win.
             if (!profile.isEmpty) add(ChatMessage(role = "system", content = profileContext(profile)))
             // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
-            if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
+            // Long-term skips keys the declared profile overrides, so it may render empty — guard on that.
+            if (longTerm.keys.any { it !in overriddenLongTermKeys(profile) }) {
+                add(ChatMessage(role = "system", content = longTermContext(profile)))
+            }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
             // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
@@ -273,7 +276,10 @@ class WishChatAgent(
             // Declared user profile — see [send]; kept identical so a regenerate honors it too.
             if (!profile.isEmpty) add(ChatMessage(role = "system", content = profileContext(profile)))
             // Always-on memory layers — injected on every strategy, orthogonal to context strategy.
-            if (longTerm.isNotEmpty()) add(ChatMessage(role = "system", content = longTermContext()))
+            // Long-term skips keys the declared profile overrides, so it may render empty — guard on that.
+            if (longTerm.keys.any { it !in overriddenLongTermKeys(profile) }) {
+                add(ChatMessage(role = "system", content = longTermContext(profile)))
+            }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
             // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
@@ -437,16 +443,32 @@ class WishChatAgent(
         facts.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
     }
 
-    private fun longTermContext(): String = buildString {
+    private fun longTermContext(profile: UserProfile): String = buildString {
         append("Long-term memory — persistent user profile (remembered across sessions):\n")
-        longTerm.forEach { (k, v) -> append("- ").append(k).append(": ").append(v).append('\n') }
+        val omit = overriddenLongTermKeys(profile)
+        longTerm.forEach { (k, v) ->
+            if (k !in omit) append("- ").append(k).append(": ").append(v).append('\n')
+        }
+    }
+
+    // Long-term keys the declared profile supersedes — omitted from the injected long-term block so
+    // the model never sees a learned value contradicting a declared one. Stored memory is untouched.
+    private fun overriddenLongTermKeys(p: UserProfile): Set<String> = buildSet {
+        if (p.name.isNotBlank()) add("user_name")
+        if (p.style != ReplyStyle.DEFAULT) add("communication_style")
     }
 
     // The user's *declared* preferences (set in Settings). Only set fields become instruction
     // lines; DEFAULT/blank are omitted so they don't constrain the model.
     private fun profileContext(p: UserProfile): String = buildString {
-        append("User profile — declared preferences, honor these:\n")
-        if (p.name.isNotBlank()) append("- Address the user as ").append(p.name).append('\n')
+        append(
+            "User profile — preferences the user set in Settings. These are AUTHORITATIVE and " +
+                "OVERRIDE long-term memory and any name or preference mentioned in the conversation:\n"
+        )
+        if (p.name.isNotBlank()) {
+            append("- Always address the user as ").append(p.name)
+                .append(", even if a different name appears in the conversation or in memory\n")
+        }
         when (p.style) {
             ReplyStyle.DEFAULT -> {}
             ReplyStyle.CONCISE -> append("- Style: keep replies concise and to the point\n")
