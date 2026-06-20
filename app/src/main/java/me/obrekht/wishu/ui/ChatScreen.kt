@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -46,6 +48,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -69,6 +72,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import me.obrekht.wishu.R
 import me.obrekht.wishu.agent.AuxKind
 import me.obrekht.wishu.agent.ContextStrategy
+import me.obrekht.wishu.agent.TaskStage
+import me.obrekht.wishu.agent.TaskState
 import me.obrekht.wishu.agent.TurnTokens
 import java.util.Locale
 
@@ -200,6 +205,7 @@ fun ChatScreen(
                 tonalElevation = 2.dp
             ) {
                 Column {
+                    TaskStatePanel(taskState = uiState.taskState)
                     MemoryLayersPanel(
                         shortTermCount = uiState.messages.size,
                         workingMemory = uiState.workingMemory,
@@ -208,6 +214,13 @@ fun ChatScreen(
                         longTermChanged = uiState.longTermChanged,
                         memoryUpdating = uiState.memoryUpdating
                     )
+                    if (uiState.taskState.awaitingApproval) {
+                        StageGateBanner(
+                            stage = uiState.taskState.stage,
+                            onApprove = viewModel::approveStageAdvance,
+                            onKeepRefining = viewModel::dismissStageGate
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -301,6 +314,190 @@ fun ChatScreen(
             }
         }
     }
+}
+
+// Human-validation gate (Day 14): shown only while the FSM is paused on a boundary because the
+// helper judged the stage complete but was unsure. Names the proposed current ▸ next transition and
+// lets the user Approve (advance one stage) or Keep refining (dismiss, stay). Both are code-gated —
+// Approve still moves only to stage.next.
+@Composable
+private fun StageGateBanner(
+    stage: TaskStage,
+    onApprove: () -> Unit,
+    onKeepRefining: () -> Unit
+) {
+    val next = stage.next ?: return // never opens at terminal; defensive
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.task_gate_question),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(stageLabel(stage)),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = " ▸ ",
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Text(
+                    text = stringResource(stageLabel(next)),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onKeepRefining) {
+                    Text(stringResource(R.string.task_gate_keep))
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onApprove) {
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.task_gate_approve))
+                }
+            }
+        }
+    }
+}
+
+// Collapsible task-state panel (Day 13): shows the FSM's stage trail (planning ▸ execution ▸
+// validation ▸ done) with the active stage highlighted, and — when expanded — the current step +
+// expected action. The stage advances in code (never skips); this just renders it.
+@Composable
+private fun TaskStatePanel(taskState: TaskState) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            onClick = { expanded = !expanded },
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.task_panel_title),
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    StageTrail(taskState.stage)
+                }
+                Icon(
+                    Icons.Rounded.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+        if (expanded) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TaskInfoRow(
+                        label = stringResource(R.string.task_current_step),
+                        value = taskState.currentStep.ifBlank { stringResource(R.string.memory_empty) }
+                    )
+                    TaskInfoRow(
+                        label = stringResource(R.string.task_expected_action),
+                        value = taskState.expectedAction.ifBlank { stringResource(R.string.memory_empty) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// The four fixed stages, in order, active one highlighted. Stage names are latin in both locales
+// (like the SHORT/WORK/LONG memory chips) — they label the formal FSM states.
+@Composable
+private fun StageTrail(stage: TaskStage) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TaskStage.entries.forEachIndexed { i, s ->
+            val active = s == stage
+            Text(
+                text = stringResource(stageLabel(s)),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+                color = if (active) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            if (i < TaskStage.entries.lastIndex) {
+                Text(
+                    text = " ▸ ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskInfoRow(label: String, value: String) {
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.secondary,
+            contentColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+private fun stageLabel(stage: TaskStage): Int = when (stage) {
+    TaskStage.PLANNING -> R.string.task_stage_planning
+    TaskStage.EXECUTION -> R.string.task_stage_execution
+    TaskStage.VALIDATION -> R.string.task_stage_validation
+    TaskStage.DONE -> R.string.task_stage_done
 }
 
 // Collapsible memory layers debug panel: shows what's in each of the three memory layers, and
@@ -616,11 +813,13 @@ private fun UserBubble(
                     shape = RoundedCornerShape(20.dp),
                     modifier = Modifier.fillMaxWidth(0.85f)
                 ) {
-                    Text(
-                        text = text,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = text,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
                 }
             }
         }
@@ -693,7 +892,9 @@ private fun AssistantBubble(
                     if (message.content.isBlank()) {
                         LoadingIndicator(color = MaterialTheme.colorScheme.primary)
                     } else {
-                        MarkdownText(message.content)
+                        SelectionContainer {
+                            MarkdownText(message.content)
+                        }
                     }
                     // Per-turn accounting.
                     tokens2?.let {

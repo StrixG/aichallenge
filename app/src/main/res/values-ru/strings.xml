@@ -74,4 +74,16 @@
     <string name="profile_format_prose">Абзацами</string>
     <string name="profile_constraints_label">Ограничения</string>
     <string name="profile_constraints_hint">напр. бюджет до 3000 ₽; без электроники</string>
+
+    <!-- Day 13: task state machine -->
+    <string name="task_panel_title">Состояние задачи</string>
+    <string name="task_stage_planning">planning</string>
+    <string name="task_stage_execution">execution</string>
+    <string name="task_stage_validation">validation</string>
+    <string name="task_stage_done">done</string>
+    <string name="task_current_step">Шаг</string>
+    <string name="task_expected_action">Дальше</string>
+    <string name="task_gate_question">Похоже, этап завершён, но я не уверен — перейти к следующему этапу?</string>
+    <string name="task_gate_approve">Подтвердить</string>
+    <string name="task_gate_keep">Уточнить</string>
 </resources>

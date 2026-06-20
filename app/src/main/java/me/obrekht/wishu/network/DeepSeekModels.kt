@@ -11,8 +11,14 @@ data class ChatRequest(
     val temperature: Double = 0.9,
     val stop: List<String>? = null,
     val stream: Boolean = false,
-    @SerialName("stream_options") val streamOptions: StreamOptions? = null
+    @SerialName("stream_options") val streamOptions: StreamOptions? = null,
+    // Hybrid flash model thinks by default; pass type="disabled" to skip reasoning on cheap helper
+    // calls (e.g. the task-state check) where chain-of-thought wastes tokens/latency. Null = omit.
+    val thinking: Thinking? = null
 )
+
+@Serializable
+data class Thinking(val type: String)
 
 @Serializable
 data class StreamOptions(

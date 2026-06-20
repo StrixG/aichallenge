@@ -15,6 +15,7 @@ import me.obrekht.wishu.agent.AuxKind
 import me.obrekht.wishu.agent.ChatEvent
 import me.obrekht.wishu.agent.ContextStrategy
 import me.obrekht.wishu.agent.ContextWindowExceededException
+import me.obrekht.wishu.agent.TaskState
 import me.obrekht.wishu.agent.TurnTokens
 import me.obrekht.wishu.agent.WishChatAgent
 import me.obrekht.wishu.data.Branch
@@ -58,7 +59,10 @@ data class ChatUiState(
     val longTermChanged: Boolean = false,
     // True while the memory-layer helper calls run (after the reply streamed) — drives the
     // memory panel's loading spinner.
-    val memoryUpdating: Boolean = false
+    val memoryUpdating: Boolean = false,
+    // The formal task state machine (Day 13): stage + step + expected action, for the
+    // task panel. Advanced in code (never skips); see WishChatAgent / TaskStateMachine.
+    val taskState: TaskState = TaskState.EMPTY
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -70,7 +74,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         app.database.chatSummaryDao(),
         app.database.chatFactsDao(),
         app.database.chatBranchDao(),
-        app.database.longTermMemoryDao()
+        app.database.longTermMemoryDao(),
+        app.database.taskStateDao()
     )
     private val settingsRepository = app.settingsRepository
 
@@ -91,12 +96,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             val savedSummary = chatHistoryRepository.loadSummary()
             val savedFacts = chatHistoryRepository.loadFacts()
             val savedLongTerm = chatHistoryRepository.loadLongTermMemory()
+            val savedTaskState = chatHistoryRepository.loadTaskState() ?: TaskState.EMPTY
             agent.restore(
                 history = transcript,
                 summary = savedSummary?.summary,
                 summarizedCount = savedSummary?.summarizedCount ?: 0,
                 factsToon = savedFacts,
-                longTermFacts = savedLongTerm
+                longTermFacts = savedLongTerm,
+                taskState = savedTaskState
             )
             val mem = agent.memorySnapshot()
             _uiState.update {
@@ -105,7 +112,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     activeBranchId = activeId,
                     versionGroups = computeVersionGroups(activeId, allBranches),
                     workingMemory = mem.working,
-                    longTermMemory = mem.longTerm
+                    longTermMemory = mem.longTerm,
+                    taskState = agent.taskState()
                 )
             }
         }
@@ -197,12 +205,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     AuxKind.NONE -> Unit
                 }
                 chatHistoryRepository.saveAllLongTermFacts(agent.longTermFacts)
+                chatHistoryRepository.saveTaskState(agent.taskState())
                 val mem = agent.memorySnapshot()
                 _uiState.update { it.copy(
                     workingMemory = mem.working,
                     longTermMemory = mem.longTerm,
                     workingChanged = mem.working != it.workingMemory,
-                    longTermChanged = mem.longTerm != it.longTermMemory
+                    longTermChanged = mem.longTerm != it.longTermMemory,
+                    taskState = agent.taskState()
                 ) }
             } catch (e: ContextWindowExceededException) {
                 _uiState.update { state ->
@@ -232,6 +242,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Change the context-management strategy (same setting the Settings radio drives). */
     fun setStrategy(strategy: ContextStrategy) {
         settingsRepository.setStrategy(strategy)
+    }
+
+    /** Day 14 gate — user approved the paused transition: advance exactly one stage and persist. */
+    fun approveStageAdvance() {
+        if (_uiState.value.isStreaming) return
+        viewModelScope.launch {
+            agent.approveStageAdvance()
+            chatHistoryRepository.saveTaskState(agent.taskState())
+            _uiState.update { it.copy(taskState = agent.taskState()) }
+        }
+    }
+
+    /** Day 14 gate — user kept refining: close the gate, stay in the current stage. */
+    fun dismissStageGate() {
+        if (_uiState.value.isStreaming) return
+        viewModelScope.launch {
+            agent.dismissStageGate()
+            chatHistoryRepository.saveTaskState(agent.taskState())
+            _uiState.update { it.copy(taskState = agent.taskState()) }
+        }
     }
 
     /**
@@ -298,12 +328,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     AuxKind.NONE -> Unit
                 }
                 chatHistoryRepository.saveAllLongTermFacts(agent.longTermFacts)
+                chatHistoryRepository.saveTaskState(agent.taskState())
                 val mem = agent.memorySnapshot()
                 _uiState.update { it.copy(
                     workingMemory = mem.working,
                     longTermMemory = mem.longTerm,
                     workingChanged = mem.working != it.workingMemory,
-                    longTermChanged = mem.longTerm != it.longTermMemory
+                    longTermChanged = mem.longTerm != it.longTermMemory,
+                    taskState = agent.taskState()
                 ) }
             } catch (e: ContextWindowExceededException) {
                 _uiState.update { s ->
@@ -394,7 +426,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     versionGroups = emptyMap(),
                     workingMemory = emptyMap(),
                     workingChanged = false,
-                    longTermChanged = false
+                    longTermChanged = false,
+                    taskState = TaskState.EMPTY // session-scoped: a fresh session restarts at PLANNING
                     // longTermMemory stays — it survived the clear
                 )
             }

@@ -1,5 +1,7 @@
 package me.obrekht.wishu.data
 
+import me.obrekht.wishu.agent.TaskStage
+import me.obrekht.wishu.agent.TaskState
 import me.obrekht.wishu.network.ChatMessage
 
 // The agent's persisted summary state: the running summary text and how many of the active branch's
@@ -19,7 +21,8 @@ class ChatHistoryRepository(
     private val summaryDao: ChatSummaryDao,
     private val factsDao: ChatFactsDao,
     private val branchDao: ChatBranchDao,
-    private val longTermDao: LongTermMemoryDao
+    private val longTermDao: LongTermMemoryDao,
+    private val taskStateDao: TaskStateDao
 ) {
 
     // The active branch's effective transcript: the parent chain truncated at each fork point, then
@@ -65,6 +68,27 @@ class ChatHistoryRepository(
         }
     }
 
+    // Task state machine — session-scoped (wiped by clear()), survives app restarts ---------------
+
+    suspend fun loadTaskState(): TaskState? = taskStateDao.get()?.let {
+        TaskState(
+            stage = TaskStage.fromName(it.stage),
+            currentStep = it.currentStep,
+            expectedAction = it.expectedAction,
+            awaitingApproval = it.awaitingApproval
+        )
+    }
+
+    suspend fun saveTaskState(state: TaskState) =
+        taskStateDao.upsert(
+            TaskStateEntity(
+                stage = state.stage.name,
+                currentStep = state.currentStep,
+                expectedAction = state.expectedAction,
+                awaitingApproval = state.awaitingApproval
+            )
+        )
+
     // Branch tree ---------------------------------------------------------------------------------
 
     // All branches, guaranteeing the root exists (created lazily on first access / fresh install).
@@ -90,6 +114,7 @@ class ChatHistoryRepository(
         dao.clear()
         summaryDao.clear()
         factsDao.clear()
+        taskStateDao.clear()
         branchDao.clearForks()
         ensureRoot()
     }

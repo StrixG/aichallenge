@@ -60,16 +60,17 @@ Working + long-term are **always-on**: injected as system messages on every requ
 
 ### Locale handling
 
-Language is **not** stored in `SettingsRepository`. It uses AndroidX per-app locales: `AppCompatDelegate.setApplicationLocales(...)` in `SettingsScreen`, persisted automatically via the `autoStoreLocales` `AppLocalesMetadataHolderService` in the manifest and `@xml/locale_config`. `SettingsRepository` (SharedPreferences) persists the selected DeepSeek model, the `ContextStrategy`, the active branch id, and the declared `UserProfile`. It also exposes a non-persisted `longTermClearedAt` signal so a live chat session drops its in-memory long-term copy when memory is wiped from Settings (otherwise the still-loaded agent re-persists it next turn).
+Language is **not** stored in `SettingsRepository`. It uses AndroidX per-app locales: `AppCompatDelegate.setApplicationLocales(...)` in `SettingsScreen`, persisted automatically via the `autoStoreLocales` `AppLocalesMetadataHolderService` in the manifest and `@xml/locale_config`. `SettingsRepository` (SharedPreferences) persists the selected DeepSeek model, the `ContextStrategy`, the active branch id, and the declared `UserProfile` (the task state machine is persisted in Room, not here). It also exposes a non-persisted `longTermClearedAt` signal so a live chat session drops its in-memory long-term copy when memory is wiped from Settings (otherwise the still-loaded agent re-persists it next turn).
 
 ### Data
 
-Room (`WishDatabase`, currently **v5**, `exportSchema=false`) with explicit migrations 1→5 — never destructive, each adds a table:
+Room (`WishDatabase`, currently **v6**, `exportSchema=false`) with explicit migrations 1→6 — never destructive, each adds a table:
 - v1 `wishes` (`Wish`/`WishDao`) — wishlist, observed as a `Flow` into UI state.
 - v2 `chat_messages` — persisted transcript (gains a `branchId` in v4).
 - v3 `chat_summary` — single-row running summary for the SUMMARY strategy.
 - v4 `chat_branches` (root branch seeded) + `chat_facts` — branch tree + sticky working-memory facts.
 - v5 `long_term_memory` — persistent user profile (untouched by session clear).
+- v6 `task_state` — single-row task state machine snapshot, incl. the `awaitingApproval` human-validation gate (session-scoped, wiped by session clear). The FSM (`agent/TaskState.kt`) advances one `stage.next` per turn, code-gated so the model can never skip; a low-confidence completion (helper's `confidence: low`) pauses on the boundary for the user's Approve/Keep-refining (`StageGateBanner`) instead of auto-advancing.
 
 ## Conventions
 

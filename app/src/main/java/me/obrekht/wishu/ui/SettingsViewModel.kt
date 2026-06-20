@@ -19,7 +19,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         app.database.chatSummaryDao(),
         app.database.chatFactsDao(),
         app.database.chatBranchDao(),
-        app.database.longTermMemoryDao()
+        app.database.longTermMemoryDao(),
+        app.database.taskStateDao()
     )
 
     val selectedModel: StateFlow<String> = settingsRepository.selectedModel

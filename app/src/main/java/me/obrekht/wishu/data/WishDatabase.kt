@@ -14,9 +14,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChatSummaryEntity::class,
         ChatFactsEntity::class,
         ChatBranchEntity::class,
-        LongTermMemoryEntity::class
+        LongTermMemoryEntity::class,
+        TaskStateEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class WishDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class WishDatabase : RoomDatabase() {
     abstract fun chatFactsDao(): ChatFactsDao
     abstract fun chatBranchDao(): ChatBranchDao
     abstract fun longTermMemoryDao(): LongTermMemoryDao
+    abstract fun taskStateDao(): TaskStateDao
 
     companion object {
         @Volatile
@@ -88,10 +90,25 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v5 -> v6: task state machine (Day 13). Add the single-row task_state table — stage + the
+        // model-described step/expected-action, plus the awaitingApproval human-validation gate (set
+        // when a low-confidence completion pauses the FSM on a boundary). Session-scoped: wiped by
+        // clear() alongside facts/summary, so a fresh session starts back at PLANNING.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `task_state` " +
+                        "(`id` INTEGER PRIMARY KEY NOT NULL, `stage` TEXT NOT NULL, " +
+                        "`currentStep` TEXT NOT NULL, `expectedAction` TEXT NOT NULL, " +
+                        "`awaitingApproval` INTEGER NOT NULL DEFAULT 0)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): WishDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also { INSTANCE = it }
             }

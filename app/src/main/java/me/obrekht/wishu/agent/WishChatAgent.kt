@@ -11,6 +11,7 @@ import me.obrekht.wishu.network.ChatRequest
 import me.obrekht.wishu.network.ChatResponse
 import me.obrekht.wishu.network.StreamChunk
 import me.obrekht.wishu.network.StreamOptions
+import me.obrekht.wishu.network.Thinking
 import me.obrekht.wishu.network.Usage
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -60,6 +61,28 @@ private const val LONG_TERM_MEMORY_PROMPT =
         "unchanged. Output the profile in TOON (Token-Oriented Object Notation): one 'key: value' " +
         "per line, no braces/quotes/commas. Output ONLY the TOON lines — no prose, no code fences. " +
         "Example:\nuser_name: Nikita\nlanguage: ru\ncommunication_style: concise"
+
+// Day 13: the post-turn task-state helper. Given the FIXED current stage and the latest exchange, it
+// reports ONLY whether the current stage's goal is met. It must NOT name or choose the next stage —
+// the code advances by exactly one step (TaskStage.next), so the model can never make the task skip.
+private const val TASK_STATE_PROMPT =
+    "You track a gift-planning task through four FIXED stages, strictly in this order: " +
+        "planning -> execution -> validation -> done. Stage goals: " +
+        "planning = the requirements are gathered (recipient, occasion, budget, the recipient's tastes); " +
+        "execution = concrete gift ideas have been proposed; " +
+        "validation = the user has confirmed or picked among the ideas; done = the task is closed. " +
+        "You are told the CURRENT stage, the known facts gathered so far, and the latest exchange. " +
+        "Decide ONLY whether the current stage's goal is now met, judging by the known facts AND the " +
+        "latest exchange together. You CANNOT skip ahead or choose the next stage — just report completion. " +
+        "Also report CONFIDENCE: 'high' ONLY when every part of the goal is explicitly and unambiguously " +
+        "met in the exchange; otherwise 'low'. When in doubt, choose 'low'. Low pauses the app for the " +
+        "user to confirm before moving on. " +
+        "Output in TOON (Token-Oriented Object Notation): exactly these four lines, no braces/quotes/commas, " +
+        "no prose, no code fences:\n" +
+        "stage_complete: yes|no\n" +
+        "confidence: high|low\n" +
+        "current_step: <short description of what is happening now, in the conversation's language>\n" +
+        "expected_action: <short description of what is expected next, in the conversation's language>"
 
 // Summary: keep the last KEEP_RECENT raw turns verbatim; once the un-folded tail grows past
 // FOLD_THRESHOLD, fold the oldest into the running summary. Sliding Window sends the last WINDOW
@@ -130,6 +153,20 @@ class WishChatAgent(
     /** Drop the in-memory long-term profile (e.g. after it's wiped from Settings). */
     fun clearLongTermMemory() = longTerm.clear()
 
+    // Task state machine (Day 13): a formal FSM over the task's progress, orthogonal to memory and to
+    // the context strategy. Owned here; transitions are code-gated (see [TaskStateMachine]) so the
+    // model can never make the task skip a stage. Session-scoped — reset() takes it back to PLANNING.
+    private val taskMachine = TaskStateMachine()
+
+    /** The current task-state snapshot, for the chat's task panel + persistence. */
+    fun taskState(): TaskState = taskMachine.state
+
+    /** User approved a paused stage transition (Day 14 gate): advance one stage, close the gate. */
+    fun approveStageAdvance() = taskMachine.confirmAdvance()
+
+    /** User declined a paused stage transition: close the gate, stay put and keep refining. */
+    fun dismissStageGate() = taskMachine.cancelAdvance()
+
     // Running token accounting across the dialog (resets each session, like the conversation).
     val ledger = TokenLedger()
 
@@ -139,7 +176,8 @@ class WishChatAgent(
         summary: String?,
         summarizedCount: Int,
         factsToon: String?,
-        longTermFacts: Map<String, String> = emptyMap()
+        longTermFacts: Map<String, String> = emptyMap(),
+        taskState: TaskState = TaskState.EMPTY
     ) {
         this.history.clear()
         this.history.addAll(history)
@@ -149,6 +187,7 @@ class WishChatAgent(
         factsToon?.let { facts.putAll(Toon.decode(it)) }
         longTerm.clear()
         longTerm.putAll(longTermFacts)
+        taskMachine.restore(taskState)
     }
 
     /** Swap the active transcript (Branching: switching to another branch's line). */
@@ -165,6 +204,7 @@ class WishChatAgent(
         summarizedCount = 0
         facts.clear()
         ledger.clear()
+        taskMachine.reset() // session-scoped: a fresh session starts a fresh task at PLANNING
         // longTerm intentionally preserved — persists across session resets
     }
 
@@ -178,6 +218,9 @@ class WishChatAgent(
         strategy: ContextStrategy,
         profile: UserProfile = UserProfile.EMPTY
     ): Flow<ChatEvent> = flow {
+        // A fresh user message implicitly dismisses any paused stage gate — the user chose to keep
+        // talking rather than tap Approve. The post-turn helper re-evaluates and may re-open it.
+        taskMachine.cancelAdvance()
         val userTurn = ChatMessage(role = "user", content = userMessage)
 
         // Build the request body per strategy. The turn isn't committed to [history] until AFTER a
@@ -193,6 +236,9 @@ class WishChatAgent(
                 add(ChatMessage(role = "system", content = longTermContext(profile)))
             }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // Task state machine: tell the model the CURRENT stage and to work only on it. This is the
+            // behavior-alignment layer; the no-skip guarantee itself is in code (TaskStateMachine).
+            add(ChatMessage(role = "system", content = taskStageContext(taskMachine.state)))
             // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
                 ContextStrategy.SUMMARY -> {
@@ -245,6 +291,7 @@ class WishChatAgent(
         emit(ChatEvent.MemoryUpdating)
         val workingUsage = refreshWorkingMemory(userTurn.content, full.toString())
         refreshLongTermMemory(userTurn.content, full.toString())
+        refreshTaskState(userTurn.content, full.toString())
 
         // Headline helper call shown in the token panel: the SUMMARY fold, else the working refresh.
         var auxKind = AuxKind.NONE
@@ -271,6 +318,8 @@ class WishChatAgent(
         strategy: ContextStrategy,
         profile: UserProfile = UserProfile.EMPTY
     ): Flow<ChatEvent> = flow {
+        // Regenerating a reply also dismisses any paused stage gate (see [send]); the helper re-checks.
+        taskMachine.cancelAdvance()
         val payloadMessages = buildList {
             add(ChatMessage(role = "system", content = systemPrompt))
             // Declared user profile — see [send]; kept identical so a regenerate honors it too.
@@ -281,6 +330,9 @@ class WishChatAgent(
                 add(ChatMessage(role = "system", content = longTermContext(profile)))
             }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // Task state machine: tell the model the CURRENT stage and to work only on it. This is the
+            // behavior-alignment layer; the no-skip guarantee itself is in code (TaskStateMachine).
+            add(ChatMessage(role = "system", content = taskStageContext(taskMachine.state)))
             // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
                 ContextStrategy.SUMMARY -> {
@@ -333,6 +385,7 @@ class WishChatAgent(
         val userText = history.dropLast(1).last().content
         val workingUsage = refreshWorkingMemory(userText, full.toString())
         refreshLongTermMemory(userText, full.toString())
+        refreshTaskState(userText, full.toString())
 
         // Headline helper call shown in the token panel: the SUMMARY fold, else the working refresh.
         var auxKind = AuxKind.NONE
@@ -401,6 +454,48 @@ class WishChatAgent(
         }
     }
 
+    // Task state: ask the cheap flash model whether the CURRENT stage's goal is met, plus a short
+    // description of the step / expected action. The model only reports completion (a boolean); the
+    // CODE decides the destination by calling advance() — exactly one TaskStage.next, never a jump.
+    // Errors are swallowed so a failed check never aborts the turn.
+    private fun refreshTaskState(userText: String, assistantText: String) {
+        runCatching {
+            val s = taskMachine.state
+            val instruction = buildString {
+                append("Current stage: ").append(s.stage.name.lowercase()).append("\n\n")
+                // Inject working memory so the check sees requirements (recipient, budget, tastes)
+                // gathered in earlier turns — the latest exchange alone is not enough under context
+                // strategies that trim history (sliding window, sticky facts).
+                if (facts.isNotEmpty()) {
+                    append("Known facts so far (TOON):\n").append(factsToon).append("\n\n")
+                }
+                append("Latest exchange:\n")
+                append("user: ").append(userText).append('\n')
+                append("assistant: ").append(assistantText).append('\n')
+            }
+            // Mechanical completion check — no chain-of-thought needed; disable thinking to save tokens.
+            val (text, _) = helperCall(TASK_STATE_PROMPT, instruction, thinking = false)
+            text?.let {
+                val parsed = Toon.decode(it)
+                taskMachine.updateProgress(
+                    currentStep = parsed["current_step"].orEmpty(),
+                    expectedAction = parsed["expected_action"].orEmpty()
+                )
+                // Code-gated transition: advance by exactly ONE stage only when the model says the
+                // current stage is complete. The model cannot name or pick the target stage. Day 14:
+                // if the model is UNSURE (confidence: low), pause on the boundary for human approval
+                // (requestAdvance) instead of advancing; a confident completion advances as before.
+                if (parsed["stage_complete"].equals("yes", ignoreCase = true)) {
+                    if (parsed["confidence"].equals("low", ignoreCase = true)) {
+                        taskMachine.requestAdvance()
+                    } else {
+                        taskMachine.advance()
+                    }
+                }
+            }
+        }
+    }
+
     // One non-streaming flash call: merge the existing summary + the folded turns into a new summary.
     private fun summarize(existing: String?, toFold: List<ChatMessage>): Pair<String?, Usage?> {
         val instruction = buildString {
@@ -414,7 +509,12 @@ class WishChatAgent(
     }
 
     // Shared non-streaming flash request used by the summary fold and the facts refresh.
-    private fun helperCall(system: String, userInstruction: String): Pair<String?, Usage?> {
+    // thinking=false disables the hybrid model's reasoning for purely mechanical checks.
+    private fun helperCall(
+        system: String,
+        userInstruction: String,
+        thinking: Boolean = true
+    ): Pair<String?, Usage?> {
         val payload = ChatRequest(
             model = SUMMARY_MODEL,
             messages = listOf(
@@ -422,7 +522,8 @@ class WishChatAgent(
                 ChatMessage(role = "user", content = userInstruction)
             ),
             maxTokens = 1024,
-            stream = false
+            stream = false,
+            thinking = if (thinking) null else Thinking(type = "disabled")
         )
         val request = Request.Builder()
             .url(ENDPOINT)
@@ -433,6 +534,31 @@ class WishChatAgent(
             val body = json.decodeFromString<ChatResponse>(response.body.string())
             return body.choices.firstOrNull()?.message?.content?.trim() to body.usage
         }
+    }
+
+    // Inject the FIXED current task stage so the model focuses on it and doesn't run ahead. Behavior
+    // alignment only — the structural no-skip guarantee lives in [TaskStateMachine].
+    private fun taskStageContext(s: TaskState): String = buildString {
+        append("Task state machine — the task moves through fixed stages in order: ")
+        append("planning -> execution -> validation -> done. ")
+        append("The CURRENT stage is: ").append(s.stage.name).append(".\n")
+        when (s.stage) {
+            TaskStage.PLANNING -> append(
+                "Work ONLY on planning: gather the missing requirements (recipient, occasion, budget, " +
+                    "the recipient's tastes) by asking. Do NOT propose concrete gift ideas yet.\n"
+            )
+            TaskStage.EXECUTION -> append(
+                "Work ONLY on execution: propose concrete gift ideas that fit the gathered requirements.\n"
+            )
+            TaskStage.VALIDATION -> append(
+                "Work ONLY on validation: help the user confirm or pick among the proposed ideas; " +
+                    "refine on request. Do NOT start an unrelated new task.\n"
+            )
+            TaskStage.DONE -> append(
+                "The task is done. Acknowledge completion; offer to start a new task if the user wants.\n"
+            )
+        }
+        append("Do not skip ahead to a later stage on your own.")
     }
 
     private fun summaryContext(text: String): String =
