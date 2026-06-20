@@ -3,6 +3,7 @@ package me.obrekht.wishu
 import android.app.Application
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
+import me.obrekht.wishu.data.InvariantRepository
 import me.obrekht.wishu.data.SettingsRepository
 import me.obrekht.wishu.data.WishDatabase
 import java.io.IOException
@@ -16,6 +17,7 @@ class WishuApplication : Application() {
 
     val database by lazy { WishDatabase.getDatabase(this) }
     val settingsRepository by lazy { SettingsRepository(this) }
+    val invariantRepository by lazy { InvariantRepository(database.invariantDao(), settingsRepository) }
 
     // Timeouts + retry + auth, shared by every client variant.
     private fun baseClientBuilder(): OkHttpClient.Builder =

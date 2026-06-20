@@ -79,6 +79,15 @@ class SettingsRepository(context: Context) {
         _longTermClearedAt.value = System.currentTimeMillis()
     }
 
+    // Last seed version applied to the invariants table. Lets [InvariantRepository] re-apply the
+    // built-in defaults when their definition changes (e.g. new keywords), instead of the old
+    // seed-once-when-empty rule that left stale rows on existing installs.
+    fun invariantSeedVersion(): Int = prefs.getInt(KEY_INVARIANT_SEED_VERSION, 0)
+
+    fun setInvariantSeedVersion(version: Int) {
+        prefs.edit().putInt(KEY_INVARIANT_SEED_VERSION, version).apply()
+    }
+
     companion object {
         const val MODEL_DEFAULT = "deepseek-v4-flash"
         private const val KEY_MODEL = "deepseek_model"
@@ -88,5 +97,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_PROFILE_STYLE = "profile_style"
         private const val KEY_PROFILE_FORMAT = "profile_format"
         private const val KEY_PROFILE_CONSTRAINTS = "profile_constraints"
+        private const val KEY_INVARIANT_SEED_VERSION = "invariant_seed_version"
     }
 }

@@ -80,6 +80,8 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.4.0")
     debugImplementation("com.squareup.okhttp3:logging-interceptor:5.4.0")
 
+    testImplementation("junit:junit:4.13.2")
+
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
     // Compose's ui-test-junit4 drags in espresso-core 3.5.0, whose Espresso.onIdle reflects the

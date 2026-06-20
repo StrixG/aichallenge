@@ -1,6 +1,7 @@
 package me.obrekht.wishu.agent
 
 import android.util.Log
+import me.obrekht.wishu.invariant.Invariant
 import me.obrekht.wishu.network.Usage
 
 /**
@@ -142,4 +143,24 @@ sealed interface ChatEvent {
     data object MemoryUpdating : ChatEvent
     // `aux` says which helper call (if any) ran this turn: a summary fold or a facts refresh.
     data class Complete(val tokens: TurnTokens, val aux: AuxKind = AuxKind.NONE) : ChatEvent
+
+    // Day 14: a HARD invariant was violated (by the request pre-stream, or the reply post-stream).
+    // The turn is refused: no reply is committed. [rule] is the broken rule restated in the user's
+    // language (falls back to the raw English [Invariant.rule] when the helper call fails);
+    // [alternative] is a best-effort in-constraint suggestion (null if none could be generated).
+    data class Refused(
+        val invariant: Invariant,
+        val rule: String,
+        val explanation: String,
+        val alternative: String?
+    ) : ChatEvent
+
+    // Day 14: a SOFT invariant was touched. [preGate] true = caught on the request before generating
+    // (the UI asks the user to confirm before proceeding); false = caught on the reply (a warning
+    // banner; the reply still stands).
+    data class SoftViolation(
+        val invariant: Invariant,
+        val explanation: String,
+        val preGate: Boolean
+    ) : ChatEvent
 }

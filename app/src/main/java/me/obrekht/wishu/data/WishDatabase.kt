@@ -15,9 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ChatFactsEntity::class,
         ChatBranchEntity::class,
         LongTermMemoryEntity::class,
-        TaskStateEntity::class
+        TaskStateEntity::class,
+        InvariantEntity::class
     ],
-    version = 7,
+    version = 9,
     exportSchema = false
 )
 abstract class WishDatabase : RoomDatabase() {
@@ -28,6 +29,7 @@ abstract class WishDatabase : RoomDatabase() {
     abstract fun chatBranchDao(): ChatBranchDao
     abstract fun longTermMemoryDao(): LongTermMemoryDao
     abstract fun taskStateDao(): TaskStateDao
+    abstract fun invariantDao(): InvariantDao
 
     companion object {
         @Volatile
@@ -118,12 +120,48 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v7 -> v8: invariants (Day 14). Add the persistent `invariants` table — durable rules that
+        // live outside the chat transcript and survive a session clear. Non-destructive (CREATE only);
+        // the repository seeds the gift-domain defaults on first access.
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `invariants` " +
+                        "(`id` TEXT PRIMARY KEY NOT NULL, `scope` TEXT NOT NULL, `rule` TEXT NOT NULL, " +
+                        "`check` TEXT NOT NULL, `severity` TEXT NOT NULL, `refusalReason` TEXT NOT NULL, " +
+                        "`detKind` TEXT NOT NULL, `keywords` TEXT NOT NULL, `taskId` TEXT)"
+                )
+            }
+        }
+
+        // v8 -> v9: drop the unused invariant `scope`/`taskId` columns. The GLOBAL/PROJECT scope was
+        // never enforced (all invariants always applied), so the distinction was dead weight. Recreate
+        // the table without those columns, copying existing rules across so user-added invariants survive.
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `invariants_new` " +
+                        "(`id` TEXT PRIMARY KEY NOT NULL, `rule` TEXT NOT NULL, " +
+                        "`check` TEXT NOT NULL, `severity` TEXT NOT NULL, `refusalReason` TEXT NOT NULL, " +
+                        "`detKind` TEXT NOT NULL, `keywords` TEXT NOT NULL)"
+                )
+                db.execSQL(
+                    "INSERT INTO `invariants_new` " +
+                        "(`id`, `rule`, `check`, `severity`, `refusalReason`, `detKind`, `keywords`) " +
+                        "SELECT `id`, `rule`, `check`, `severity`, `refusalReason`, `detKind`, `keywords` " +
+                        "FROM `invariants`"
+                )
+                db.execSQL("DROP TABLE `invariants`")
+                db.execSQL("ALTER TABLE `invariants_new` RENAME TO `invariants`")
+            }
+        }
+
         fun getDatabase(context: Context): WishDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                        MIGRATION_5_6, MIGRATION_6_7
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
                     )
                     .build()
                     .also { INSTANCE = it }

@@ -25,12 +25,15 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DataUsage
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.WarningAmber
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -306,6 +309,80 @@ fun ChatScreen(
                 }
             }
         }
+    }
+
+    // Day 14 — SOFT invariant caught on the request: warn and let the user proceed or back out.
+    uiState.pendingSoftConfirm?.let { confirm ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSoftViolation() },
+            icon = { Icon(Icons.Rounded.WarningAmber, contentDescription = null) },
+            title = { Text(stringResource(R.string.soft_violation_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(confirm.rule, fontWeight = FontWeight.SemiBold)
+                    if (confirm.explanation.isNotBlank()) Text(confirm.explanation)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmSoftViolation() }) {
+                    Text(stringResource(R.string.soft_violation_proceed))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissSoftViolation() }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+}
+
+// Day 14: the body of a refusal bubble — a HARD invariant blocked the reply. Names the rule, explains
+// why, and offers an in-constraint alternative when one was generated.
+@Composable
+private fun RefusalContent(refusal: RefusalInfo) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(Icons.Rounded.Block, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(
+                text = stringResource(R.string.refusal_title),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Text(refusal.rule, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        if (refusal.explanation.isNotBlank()) {
+            Text(refusal.explanation, style = MaterialTheme.typography.bodyMedium)
+        }
+        refusal.alternative?.takeIf { it.isNotBlank() }?.let { alt ->
+            Text(
+                text = stringResource(R.string.refusal_alternative, alt),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+// Day 14: a non-blocking SOFT-invariant warning shown under a reply that still stands.
+@Composable
+private fun SoftWarning(note: String) {
+    Row(
+        modifier = Modifier.padding(top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Icon(
+            Icons.Rounded.WarningAmber,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.tertiary
+        )
+        Text(
+            text = note,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.tertiary
+        )
     }
 }
 
@@ -807,22 +884,24 @@ private fun AssistantBubble(
     onSwitchBranch: (Long) -> Unit
 ) {
     val tokens2 = message.tokens
+    val isRefusal = message.refusal != null
     Column {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (isRefusal) MaterialTheme.colorScheme.errorContainer
+                else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (isRefusal) MaterialTheme.colorScheme.onErrorContainer
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier.fillMaxWidth(0.92f)
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    if (message.content.isBlank()) {
-                        LoadingIndicator(color = MaterialTheme.colorScheme.primary)
-                    } else {
-                        SelectionContainer {
-                            MarkdownText(message.content)
-                        }
+                    when {
+                        message.refusal != null -> RefusalContent(message.refusal)
+                        message.content.isBlank() -> LoadingIndicator(color = MaterialTheme.colorScheme.primary)
+                        else -> SelectionContainer { MarkdownText(message.content) }
                     }
+                    message.softNote?.let { SoftWarning(it) }
                     // Per-turn accounting.
                     tokens2?.let {
                         HorizontalDivider(

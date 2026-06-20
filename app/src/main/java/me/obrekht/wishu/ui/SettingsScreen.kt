@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -61,6 +62,7 @@ private data class ModelOption(val id: String, val label: String)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onOpenInvariants: () -> Unit = {},
     viewModel: SettingsViewModel = viewModel()
 ) {
     val languages = listOf(
@@ -213,6 +215,18 @@ fun SettingsScreen(
             }
 
             SettingsSection(
+                icon = Icons.Rounded.Shield,
+                title = stringResource(R.string.invariants_title)
+            ) {
+                NavigationOption(
+                    label = stringResource(R.string.invariants_settings_label),
+                    description = stringResource(R.string.invariants_settings_caption),
+                    shape = groupedItemShape(0, 1),
+                    onClick = onOpenInvariants
+                )
+            }
+
+            SettingsSection(
                 icon = Icons.Rounded.Psychology,
                 title = stringResource(R.string.memory_section_title)
             ) {
@@ -312,6 +326,40 @@ private fun groupedItemShape(index: Int, count: Int): RoundedCornerShape {
         bottomStart = if (last) large else small,
         bottomEnd = if (last) large else small
     )
+}
+
+@Composable
+private fun NavigationOption(
+    label: String,
+    description: String,
+    shape: RoundedCornerShape,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Rounded.Shield, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(text = label, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
 }
 
 @Composable

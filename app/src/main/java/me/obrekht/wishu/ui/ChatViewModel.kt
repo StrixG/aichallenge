@@ -21,6 +21,7 @@ import me.obrekht.wishu.agent.WishChatAgent
 import me.obrekht.wishu.data.Branch
 import me.obrekht.wishu.data.ChatHistoryRepository
 import me.obrekht.wishu.data.ROOT_BRANCH_ID
+import me.obrekht.wishu.invariant.Invariant
 import me.obrekht.wishu.network.ChatMessage
 
 data class ChatUiMessage(
@@ -29,8 +30,18 @@ data class ChatUiMessage(
     // Token accounting for this assistant turn (null for user turns / restored bubbles).
     val tokens: TurnTokens? = null,
     // Which helper call (if any) ran on this turn — drives the per-turn note.
-    val aux: AuxKind = AuxKind.NONE
+    val aux: AuxKind = AuxKind.NONE,
+    // Day 14: a HARD-invariant refusal rendered in place of an assistant reply.
+    val refusal: RefusalInfo? = null,
+    // Day 14: a SOFT-invariant warning shown under a reply that still stands.
+    val softNote: String? = null
 )
+
+// Day 14: what a refusal card shows — the broken rule, why, and an in-constraint alternative.
+data class RefusalInfo(val rule: String, val explanation: String, val alternative: String?)
+
+// Day 14: a pending SOFT-invariant confirmation — the user can proceed (re-send with override) or cancel.
+data class SoftConfirm(val text: String, val rule: String, val explanation: String)
 
 // Pager info at a single message index: current version, total, and which branch ids to navigate to.
 data class VersionInfo(val current: Int, val total: Int, val prevId: Long?, val nextId: Long?)
@@ -62,7 +73,9 @@ data class ChatUiState(
     val memoryUpdating: Boolean = false,
     // The formal task state machine (Day 13): stage + step + expected action, for the
     // task panel. Advanced in code (never skips); see WishChatAgent / TaskStateMachine.
-    val taskState: TaskState = TaskState.EMPTY
+    val taskState: TaskState = TaskState.EMPTY,
+    // Day 14: a pending SOFT-invariant confirmation dialog (null = none).
+    val pendingSoftConfirm: SoftConfirm? = null
 )
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -78,12 +91,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         app.database.taskStateDao()
     )
     private val settingsRepository = app.settingsRepository
+    private val invariantRepository = app.invariantRepository
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     // Full branch tree; kept private — the UI only needs the derived versionGroups.
     private var allBranches: List<Branch> = emptyList()
+
+    // Day 14: the live invariants, mirrored from the repository and passed to every agent call.
+    private var invariants: List<Invariant> = emptyList()
 
     init {
         // Restore the saved session: re-seed the agent (active branch transcript + summary + facts)
@@ -138,6 +155,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(longTermMemory = emptyMap(), longTermChanged = false) }
             }
         }
+        // Day 14: seed the default invariants on first run, then mirror the live list for agent calls.
+        viewModelScope.launch {
+            invariantRepository.seedDefaults()
+            invariantRepository.invariants.collect { invariants = it }
+        }
     }
 
     fun onInputChange(value: TextFieldValue) {
@@ -153,9 +175,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Append the user/assistant bubbles, stream the reply, and handle completion/errors. On failure
-     * the typed [text] is put back in the input box so the user can retry.
+     * the typed [text] is put back in the input box so the user can retry. [overrideSoft] is set when
+     * the user confirmed a SOFT-invariant warning and wants to proceed (Day 14).
      */
-    private fun dispatch(text: String) {
+    private fun dispatch(text: String, overrideSoft: Boolean = false) {
         _uiState.update {
             it.copy(
                 messages = it.messages +
@@ -175,7 +198,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val strategy = settingsRepository.strategy.value
                 val profile = settingsRepository.profile.value
                 var aux = AuxKind.NONE
-                agent.send(text, model, strategy, profile).collect { event ->
+                // Day 14: a HARD refusal or a pre-stream SOFT warning ends the turn without committing.
+                var refused = false
+                var softPre = false
+                agent.send(text, model, strategy, profile, invariants, overrideSoft).collect { event ->
                     when (event) {
                         is ChatEvent.Token -> _uiState.update { state ->
                             state.copy(messages = appendToLast(state.messages, event.delta))
@@ -183,6 +209,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // Pre-stream: flip the stage badge the moment the FSM advances.
                         is ChatEvent.TaskAdvanced -> _uiState.update { it.copy(taskState = event.state) }
                         ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
+                        is ChatEvent.Refused -> {
+                            refused = true
+                            _uiState.update { state ->
+                                val last = state.messages.last()
+                                state.copy(
+                                    messages = state.messages.dropLast(1) + last.copy(
+                                        content = "",
+                                        refusal = RefusalInfo(
+                                            event.rule, event.explanation, event.alternative
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                        is ChatEvent.SoftViolation -> {
+                            if (event.preGate) {
+                                // Caught before generating: drop the optimistic bubbles, ask to confirm.
+                                softPre = true
+                                _uiState.update { state ->
+                                    state.copy(
+                                        messages = state.messages.dropLast(2),
+                                        pendingSoftConfirm = SoftConfirm(
+                                            text, event.invariant.rule, event.explanation
+                                        )
+                                    )
+                                }
+                            } else {
+                                // Caught on the reply: keep it, flag a warning banner.
+                                _uiState.update { state ->
+                                    val last = state.messages.last()
+                                    state.copy(messages = state.messages.dropLast(1) +
+                                        last.copy(softNote = event.explanation))
+                                }
+                            }
+                        }
                         is ChatEvent.Complete -> {
                             aux = event.aux
                             _uiState.update { state ->
@@ -195,6 +256,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
+                }
+                // A refused/soft-blocked turn leaves no committed reply: stop here (no persistence).
+                if (refused || softPre) {
+                    _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
+                    recomputeVersionGroups()
+                    return@launch
                 }
                 val rawReply = _uiState.value.messages.last().content
                 _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
@@ -281,7 +348,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val strategy = settingsRepository.strategy.value
                 val profile = settingsRepository.profile.value
                 var aux = AuxKind.NONE
-                agent.regenerate(model, strategy, profile).collect { event ->
+                var refused = false
+                agent.regenerate(model, strategy, profile, invariants).collect { event ->
                     when (event) {
                         is ChatEvent.Token -> _uiState.update { s ->
                             s.copy(messages = appendToLast(s.messages, event.delta))
@@ -289,6 +357,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         // Regenerate never advances the stage, but the event is part of the sealed type.
                         is ChatEvent.TaskAdvanced -> _uiState.update { it.copy(taskState = event.state) }
                         ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
+                        is ChatEvent.Refused -> {
+                            refused = true
+                            _uiState.update { s ->
+                                val last = s.messages.last()
+                                s.copy(messages = s.messages.dropLast(1) + last.copy(
+                                    content = "",
+                                    refusal = RefusalInfo(event.rule, event.explanation, event.alternative)
+                                ))
+                            }
+                        }
+                        is ChatEvent.SoftViolation -> _uiState.update { s ->
+                            val last = s.messages.last()
+                            s.copy(messages = s.messages.dropLast(1) + last.copy(softNote = event.explanation))
+                        }
                         is ChatEvent.Complete -> {
                             aux = event.aux
                             _uiState.update { s ->
@@ -301,6 +383,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
+                }
+                if (refused) {
+                    _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
+                    recomputeVersionGroups()
+                    return@launch
                 }
                 val rawReply = _uiState.value.messages.last().content
                 _uiState.update { it.copy(isStreaming = false, memoryUpdating = false) }
@@ -420,6 +507,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearError() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    /** Day 14: user confirmed the SOFT-invariant warning — re-send the same message, skipping the gate. */
+    fun confirmSoftViolation() {
+        val pending = _uiState.value.pendingSoftConfirm ?: return
+        _uiState.update { it.copy(pendingSoftConfirm = null) }
+        dispatch(pending.text, overrideSoft = true)
+    }
+
+    /** Day 14: user dismissed the SOFT-invariant warning — drop it, restore the text for editing. */
+    fun dismissSoftViolation() {
+        val pending = _uiState.value.pendingSoftConfirm ?: return
+        _uiState.update {
+            it.copy(pendingSoftConfirm = null, inputText = TextFieldValue(pending.text))
+        }
     }
 
     private fun recomputeVersionGroups() {

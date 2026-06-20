@@ -5,6 +5,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
+import me.obrekht.wishu.invariant.Invariant
+import me.obrekht.wishu.invariant.InvariantChecker
+import me.obrekht.wishu.invariant.InvariantResult
+import me.obrekht.wishu.invariant.InvariantValidator
+import me.obrekht.wishu.invariant.Severity
 import me.obrekht.wishu.network.ApiErrorEnvelope
 import me.obrekht.wishu.network.ChatMessage
 import me.obrekht.wishu.network.ChatRequest
@@ -92,6 +97,24 @@ private const val TASK_STATE_PROMPT =
         "current_step: <short description of what is happening now, in the conversation's language>\n" +
         "expected_action: <short description of what is expected next, in the conversation's language>"
 
+// Day 14: phrase a HARD refusal for the user — the reason it can't be met PLUS one in-constraint
+// alternative — and crucially BOTH in the user's own language. The raw invariant explanation is English
+// (code diagnostics / English seeds / a validator reason with no language directive), so showing it
+// verbatim made the refusal card English even in a Russian chat. One flash call (replaces the old
+// alternative-only call), TOON out.
+private const val REFUSAL_PROMPT =
+    "A user's gift request breaks a hard INVARIANT and must be refused. Given the INVARIANT and the " +
+        "request, output exactly three TOON lines, no prose, no code fences:\n" +
+        "rule: <the broken rule restated as one short phrase>\n" +
+        "reason: <one short sentence saying you can't help with this and why>\n" +
+        "alternative: <one brief, concrete gift idea that fully respects the invariant>\n" +
+        "Keep the line keys (rule, reason, alternative) EXACTLY as written, in English. Translate only " +
+        "the VALUES after the colon into the SAME LANGUAGE as the request."
+
+// Day 14: a refusal phrased in the user's language. Any field may be null when the helper call fails —
+// callers fall back to the raw (English) invariant text.
+private data class RefusalText(val rule: String?, val reason: String?, val alternative: String?)
+
 // Summary: keep the last KEEP_RECENT raw turns verbatim; once the un-folded tail grows past
 // FOLD_THRESHOLD, fold the oldest into the running summary. Sliding Window sends the last WINDOW
 // messages; Sticky Facts sends only the last STICKY_WINDOW (leaning on the working-memory layer).
@@ -133,6 +156,9 @@ class WishChatAgent(
         encodeDefaults = true
         explicitNulls = false
     }
+
+    // Day 14: the semantic invariant layer (the LLM "проверяла"). Shares the agent's client.
+    private val validator = InvariantValidator(client)
 
     // The full active transcript (no system prompt). Every strategy derives its payload from this.
     private val history = mutableListOf<ChatMessage>()
@@ -218,13 +244,30 @@ class WishChatAgent(
         userMessage: String,
         model: String,
         strategy: ContextStrategy,
-        profile: UserProfile = UserProfile.EMPTY
+        profile: UserProfile = UserProfile.EMPTY,
+        invariants: List<Invariant> = emptyList(),
+        // True when the user already confirmed a SOFT-invariant warning and wants to proceed — the
+        // SOFT gate is skipped this turn (HARD invariants always apply).
+        overrideSoft: Boolean = false
     ): Flow<ChatEvent> = flow {
         val userTurn = ChatMessage(role = "user", content = userMessage)
+
+        // Day 14 — pre-stream invariant gate on the REQUEST. Refuse a blatantly violating ask BEFORE
+        // the main call, so a rejected request costs no main-model tokens and never advances the FSM.
+        firstViolation(userMessage, invariants, includeSoft = !overrideSoft)?.let { v ->
+            if (v.invariant.severity == Severity.HARD) {
+                val r = refusalDetails(userMessage, v.invariant)
+                emit(ChatEvent.Refused(v.invariant, r.rule ?: v.invariant.rule, r.reason ?: v.explanation, r.alternative))
+            } else {
+                emit(ChatEvent.SoftViolation(v.invariant, v.explanation, preGate = true))
+            }
+            return@flow
+        }
+
         // Decide the task stage BEFORE generating: if the user's message completes the current stage,
         // advance now so the reply is produced under the NEW stage. Doing this post-turn made the stage
         // lag the content by a turn — ideas leaked into PLANNING, then the stage flipped to EXECUTION.
-        advanceTaskState(userMessage)
+        advanceTaskState(userMessage, invariants)
         // Push the (possibly advanced) stage to the UI now, before a single token streams.
         emit(ChatEvent.TaskAdvanced(taskMachine.state))
 
@@ -241,6 +284,9 @@ class WishChatAgent(
                 add(ChatMessage(role = "system", content = longTermContext(profile)))
             }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // Day 14 — invariants: the rules the model must reason within and never break. Injected
+            // after the memory layers, only the relevant ones (not the whole transcript).
+            if (invariants.isNotEmpty()) add(ChatMessage(role = "system", content = invariantsContext(invariants)))
             // The strategy only decides how the raw transcript is trimmed.
             when (strategy) {
                 ContextStrategy.SUMMARY -> {
@@ -290,8 +336,23 @@ class WishChatAgent(
                 emit(ChatEvent.Token(delta))
             }
         }
+        // Day 14 — post-stream gate on the REPLY: catch the model violating an invariant in its OWN
+        // output. Computed once; a HARD violation discards the reply (never committed to history) and
+        // refuses instead, a SOFT one keeps the (already useful) reply but flags a warning banner.
+        val reply = full.toString()
+        val postViolations = checkViolations(reply, invariants, includeSoft = !overrideSoft)
+        postViolations.firstOrNull { it.invariant.severity == Severity.HARD }?.let { v ->
+            val r = refusalDetails(userMessage, v.invariant)
+            emit(ChatEvent.Refused(v.invariant, r.rule ?: v.invariant.rule, r.reason ?: v.explanation, r.alternative))
+            return@flow
+        }
+
         history.add(userTurn)
-        history.add(ChatMessage(role = "assistant", content = full.toString()))
+        history.add(ChatMessage(role = "assistant", content = reply))
+
+        postViolations.firstOrNull { it.invariant.severity == Severity.SOFT }?.let { v ->
+            emit(ChatEvent.SoftViolation(v.invariant, v.explanation, preGate = false))
+        }
 
         // Always-on memory layers refresh every turn (all strategies). Long-term is background/untracked.
         // These are blocking helper LLM calls — signal the UI so it can show a memory-updating spinner.
@@ -322,7 +383,8 @@ class WishChatAgent(
     fun regenerate(
         model: String,
         strategy: ContextStrategy,
-        profile: UserProfile = UserProfile.EMPTY
+        profile: UserProfile = UserProfile.EMPTY,
+        invariants: List<Invariant> = emptyList()
     ): Flow<ChatEvent> = flow {
         // A regenerate reproduces the reply under the CURRENT stage — it does not re-run the stage
         // transition (that's driven by the user's message in [send], which already ran).
@@ -336,6 +398,8 @@ class WishChatAgent(
                 add(ChatMessage(role = "system", content = longTermContext(profile)))
             }
             if (facts.isNotEmpty()) add(ChatMessage(role = "system", content = factsContext()))
+            // Day 14 — invariants: same rules as [send], so a regenerated reply honors them too.
+            if (invariants.isNotEmpty()) add(ChatMessage(role = "system", content = invariantsContext(invariants)))
             // Task state machine: tell the model the CURRENT stage and to work only on it. This is the
             // behavior-alignment layer; the no-skip guarantee itself is in code (TaskStateMachine).
             add(ChatMessage(role = "system", content = taskStageContext(taskMachine.state)))
@@ -382,8 +446,22 @@ class WishChatAgent(
                 emit(ChatEvent.Token(delta))
             }
         }
+        // Day 14 — post-stream gate: a regenerated reply is subject to the same invariants.
+        val regenUserText = history.lastOrNull { it.role == "user" }?.content.orEmpty()
+        val reply = full.toString()
+        val postViolations = checkViolations(reply, invariants, includeSoft = true)
+        postViolations.firstOrNull { it.invariant.severity == Severity.HARD }?.let { v ->
+            val r = refusalDetails(regenUserText, v.invariant)
+            emit(ChatEvent.Refused(v.invariant, r.rule ?: v.invariant.rule, r.reason ?: v.explanation, r.alternative))
+            return@flow
+        }
+
         // Only the assistant turn is committed; the user turn is already in history.
-        history.add(ChatMessage(role = "assistant", content = full.toString()))
+        history.add(ChatMessage(role = "assistant", content = reply))
+
+        postViolations.firstOrNull { it.invariant.severity == Severity.SOFT }?.let { v ->
+            emit(ChatEvent.SoftViolation(v.invariant, v.explanation, preGate = false))
+        }
 
         // Always-on memory layers refresh every turn (all strategies). Long-term is background/untracked.
         // These are blocking helper LLM calls — signal the UI so it can show a memory-updating spinner.
@@ -466,10 +544,25 @@ class WishChatAgent(
     // lags the stage by a turn. The model only reports completion (a boolean); the CODE decides the
     // destination by calling advance() — exactly one TaskStage.next, never a jump. Errors are swallowed
     // so a failed check never aborts the turn.
-    private fun advanceTaskState(userText: String) {
+    private fun advanceTaskState(userText: String, invariants: List<Invariant> = emptyList()) {
         runCatching {
             val s = taskMachine.state
             if (s.stage.next == null) return@runCatching // terminal stage: nothing to advance
+
+            // Day 14 — FSM coupling: at VALIDATION, run the invariant layers over the ideas already on
+            // the table (the last assistant turn) before letting the task reach DONE. A violation
+            // regresses to EXECUTION — code-gated (TaskStateMachine.regressTo), not the model's call —
+            // so a bad pick can never slip through to DONE. Return early: no advance this turn.
+            if (s.stage == TaskStage.VALIDATION && invariants.isNotEmpty()) {
+                val proposed = history.lastOrNull { it.role == "assistant" }?.content.orEmpty()
+                if (proposed.isNotBlank() &&
+                    checkViolations(proposed, invariants, includeSoft = false).isNotEmpty()
+                ) {
+                    taskMachine.regressTo(TaskStage.EXECUTION)
+                    return@runCatching
+                }
+            }
+
             val instruction = buildString {
                 append("Current stage: ").append(s.stage.name.lowercase()).append("\n\n")
                 // Inject working memory so the check sees requirements (recipient, budget, tastes)
@@ -503,6 +596,91 @@ class WishChatAgent(
                 }
                 if (complete) taskMachine.advance()
             }
+        }
+    }
+
+    // ---- Day 14: invariant enforcement ----------------------------------------------------------
+
+    // Run the invariant layers over [text]: the deterministic checker (pure Kotlin, the budget fact)
+    // first, then the LLM validator (semantic) ONLY when needed. Returns the violations ordered
+    // HARD-first; SOFT ones are dropped when [includeSoft] is false. Validator failures are already
+    // swallowed (fail-open) inside it.
+    //
+    // The deterministic layer short-circuits the network call: a deterministic HARD hit already
+    // refuses the turn, so the validator is skipped entirely; otherwise the validator only re-checks
+    // invariants the deterministic layer didn't already flag. So a request the local checker can
+    // settle never "flies to the AI".
+    private fun checkViolations(
+        text: String,
+        invariants: List<Invariant>,
+        includeSoft: Boolean
+    ): List<InvariantResult.Violated> {
+        if (invariants.isEmpty()) return emptyList()
+        val deterministic = InvariantChecker.check(text, facts["budget"], invariants)
+        val deterministicHard = deterministic.any { it.invariant.severity == Severity.HARD }
+        // Don't re-validate invariants already caught locally; skip the LLM call entirely on a HARD hit.
+        val flaggedIds = deterministic.map { it.invariant.id }.toSet()
+        val semantic = if (deterministicHard) emptyList()
+            else validator.validate(text, invariants.filterNot { it.id in flaggedIds })
+        // De-dupe by invariant id (BOTH-checked rules can surface in both layers); keep first hit.
+        return (deterministic + semantic)
+            .distinctBy { it.invariant.id }
+            .filter { includeSoft || it.invariant.severity == Severity.HARD }
+            .sortedBy { if (it.invariant.severity == Severity.HARD) 0 else 1 }
+    }
+
+    private fun firstViolation(
+        text: String,
+        invariants: List<Invariant>,
+        includeSoft: Boolean
+    ): InvariantResult.Violated? = checkViolations(text, invariants, includeSoft).firstOrNull()
+
+    // Best-effort refusal text in the USER'S language: the broken rule restated + a short reason + one
+    // in-constraint alternative, all inferred to the language of [userText]. One cheap flash call. On any
+    // failure, returns nulls — callers fall back to the raw (English) invariant rule/explanation, so the
+    // refusal still names the rule.
+    private fun refusalDetails(userText: String, invariant: Invariant): RefusalText = runCatching {
+        val instruction = buildString {
+            append("INVARIANT that must be respected: ").append(invariant.rule).append('\n')
+            append("The request that breaks it: ").append(userText).append('\n')
+        }
+        val raw = helperCall(REFUSAL_PROMPT, instruction, thinking = false).first
+            ?: return@runCatching RefusalText(null, null, null)
+        val parsed = Toon.decode(raw)
+        // The model occasionally translates the TOON keys too (rule -> правило), so a keyed lookup
+        // misses. Fall back to the values in line order (rule, reason, alternative) so the localized
+        // text is still used instead of the English fallback.
+        val values = raw.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("```") && it.contains(':') }
+            .map { it.substringAfter(':').trim() }
+            .filter { it.isNotEmpty() }
+            .toList()
+        RefusalText(
+            rule = (parsed["rule"]?.takeIf { it.isNotBlank() } ?: values.getOrNull(0))?.capitalizeFirst(),
+            reason = (parsed["reason"]?.takeIf { it.isNotBlank() } ?: values.getOrNull(1))?.capitalizeFirst(),
+            alternative = (parsed["alternative"]?.takeIf { it.isNotBlank() } ?: values.getOrNull(2))?.capitalizeFirst()
+        )
+    }.getOrElse { RefusalText(null, null, null) }
+
+    // Uppercase the first character so the rule/reason read as proper sentences regardless of how the
+    // helper cased its output.
+    private fun String.capitalizeFirst(): String =
+        replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
+    // The invariants block injected into every request: the rules + the instruction to reason within
+    // them and refuse anything that breaks one. Only the rule text is sent — not the internal check
+    // type / keywords — so the model reasons about meaning, not the enforcement mechanics.
+    private fun invariantsContext(invariants: List<Invariant>): String = buildString {
+        append(
+            "Invariants — hard rules you must NEVER break. Before answering, check your reply against " +
+                "them and reason strictly within them. If the user's request or any idea you'd propose " +
+                "would break one, do NOT comply: refuse plainly, name which rule it breaks and why, and " +
+                "offer an alternative that respects it. HARD rules are absolute; for SOFT rules, warn " +
+                "and let the user decide.\n"
+        )
+        invariants.forEach { inv ->
+            append("- [").append(inv.severity.name).append("] ").append(inv.rule).append('\n')
         }
     }
 

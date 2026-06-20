@@ -70,6 +70,20 @@ class TaskStateMachine(initial: TaskState = TaskState()) {
         return true
     }
 
+    /**
+     * Day 14: regress to an EARLIER stage when an invariant is violated at VALIDATION — the only way
+     * the FSM moves backward. Still code-gated: the destination must be in [ALLOWED_REGRESSIONS], so a
+     * caller (or model output) cannot jump to an arbitrary stage. Returns false if the regression isn't
+     * in the table (e.g. forward, self, or an undefined source). The task can never reach DONE with an
+     * open violation because [WishChatAgent] calls this instead of [advance] in that case.
+     */
+    fun regressTo(target: TaskStage): Boolean {
+        val allowed = ALLOWED_REGRESSIONS[state.stage] ?: return false
+        if (target !in allowed) return false
+        state = state.copy(stage = target)
+        return true
+    }
+
     /** Record the model's free-text description of the current step / expected action. */
     fun updateProgress(currentStep: String, expectedAction: String) {
         state = state.copy(currentStep = currentStep, expectedAction = expectedAction)
@@ -83,5 +97,14 @@ class TaskStateMachine(initial: TaskState = TaskState()) {
     /** Re-seed from persisted state on app restart / restore. */
     fun restore(saved: TaskState) {
         state = saved
+    }
+
+    private companion object {
+        // The ONLY backward transitions the FSM permits — the "table of allowed transitions". A
+        // VALIDATION-stage invariant violation sends the task back to EXECUTION (re-propose ideas),
+        // never silently past DONE. Anything not listed here is refused by [regressTo].
+        val ALLOWED_REGRESSIONS: Map<TaskStage, Set<TaskStage>> = mapOf(
+            TaskStage.VALIDATION to setOf(TaskStage.EXECUTION)
+        )
     }
 }

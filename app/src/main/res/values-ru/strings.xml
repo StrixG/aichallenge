@@ -72,8 +72,8 @@
     <string name="profile_format_default">Без предпочтений</string>
     <string name="profile_format_bullets">Списком</string>
     <string name="profile_format_prose">Абзацами</string>
-    <string name="profile_constraints_label">Ограничения</string>
-    <string name="profile_constraints_hint">напр. бюджет до 3000 ₽; без электроники</string>
+    <string name="profile_constraints_label">Предпочтения</string>
+    <string name="profile_constraints_hint">напр. люблю изделия ручной работы; тёплый, дружелюбный тон</string>
 
     <!-- Day 13: task state machine -->
     <string name="task_panel_title">Состояние задачи</string>
@@ -83,4 +83,32 @@
     <string name="task_stage_done">done</string>
     <string name="task_current_step">Шаг</string>
     <string name="task_expected_action">Дальше</string>
+
+    <!-- Day 14: invariants -->
+    <string name="invariants_title">Инварианты</string>
+    <string name="invariants_settings_label">Управление инвариантами</string>
+    <string name="invariants_settings_caption">Правила, которые ассистент не нарушает</string>
+    <string name="invariant_empty">Инвариантов пока нет. Добавьте через +.</string>
+    <string name="cd_add_invariant">Добавить инвариант</string>
+    <string name="cd_delete_invariant">Удалить инвариант</string>
+    <string name="invariant_field_rule">Правило</string>
+    <string name="invariant_field_refusal">Причина отказа</string>
+    <string name="invariant_field_severity">Строгость</string>
+    <string name="invariant_field_check">Проверка</string>
+    <string name="invariant_field_detkind">Детерминированная проверка</string>
+    <string name="invariant_field_keywords">Запрещённые слова</string>
+    <string name="invariant_keywords_hint">через запятую, напр. вино, виски, пиво</string>
+    <string name="invariant_save">Сохранить</string>
+    <string name="invariant_severity_hard">Жёсткий</string>
+    <string name="invariant_severity_soft">Мягкий</string>
+    <string name="invariant_check_deterministic">Код</string>
+    <string name="invariant_check_llm">ИИ</string>
+    <string name="invariant_check_both">Код + ИИ</string>
+    <string name="invariant_detkind_none">Нет</string>
+    <string name="invariant_detkind_budget">Лимит бюджета</string>
+    <string name="invariant_detkind_keywords">Запрещённые слова</string>
+    <string name="refusal_title">Запрос отклонён</string>
+    <string name="refusal_alternative">Взамен: %1$s</string>
+    <string name="soft_violation_title">Обратите внимание</string>
+    <string name="soft_violation_proceed">Всё равно продолжить</string>
 </resources>

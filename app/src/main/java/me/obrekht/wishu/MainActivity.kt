@@ -8,6 +8,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import me.obrekht.wishu.ui.ChatScreen
+import me.obrekht.wishu.ui.InvariantsScreen
 import me.obrekht.wishu.ui.SettingsScreen
 import me.obrekht.wishu.ui.WishuTheme
 import me.obrekht.wishu.ui.WishlistScreen
@@ -31,7 +32,13 @@ class MainActivity : AppCompatActivity() {
                         ChatScreen(onNavigateBack = { navController.popBackStack() })
                     }
                     composable("settings") {
-                        SettingsScreen(onNavigateBack = { navController.popBackStack() })
+                        SettingsScreen(
+                            onNavigateBack = { navController.popBackStack() },
+                            onOpenInvariants = { navController.navigate("invariants") }
+                        )
+                    }
+                    composable("invariants") {
+                        InvariantsScreen(onNavigateBack = { navController.popBackStack() })
                     }
                 }
             }
