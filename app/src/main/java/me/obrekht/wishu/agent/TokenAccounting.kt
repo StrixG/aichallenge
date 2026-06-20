@@ -135,6 +135,9 @@ enum class AuxKind { NONE, SUMMARY, FACTS }
 /** Streamed agent output: a content delta, or the final per-turn token accounting. */
 sealed interface ChatEvent {
     data class Token(val delta: String) : ChatEvent
+    // Emitted pre-stream, right after the task-state machine advances, so the UI stage badge flips
+    // before the reply streams instead of after it completes.
+    data class TaskAdvanced(val state: TaskState) : ChatEvent
     // Emitted after the reply finishes streaming, while the memory-layer helper calls run.
     data object MemoryUpdating : ChatEvent
     // `aux` says which helper call (if any) ran this turn: a summary fold or a facts refresh.

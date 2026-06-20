@@ -214,13 +214,6 @@ fun ChatScreen(
                         longTermChanged = uiState.longTermChanged,
                         memoryUpdating = uiState.memoryUpdating
                     )
-                    if (uiState.taskState.awaitingApproval) {
-                        StageGateBanner(
-                            stage = uiState.taskState.stage,
-                            onApprove = viewModel::approveStageAdvance,
-                            onKeepRefining = viewModel::dismissStageGate
-                        )
-                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -310,72 +303,6 @@ fun ChatScreen(
                             onSwitchBranch = viewModel::switchBranch
                         )
                     }
-                }
-            }
-        }
-    }
-}
-
-// Human-validation gate (Day 14): shown only while the FSM is paused on a boundary because the
-// helper judged the stage complete but was unsure. Names the proposed current ▸ next transition and
-// lets the user Approve (advance one stage) or Keep refining (dismiss, stay). Both are code-gated —
-// Approve still moves only to stage.next.
-@Composable
-private fun StageGateBanner(
-    stage: TaskStage,
-    onApprove: () -> Unit,
-    onKeepRefining: () -> Unit
-) {
-    val next = stage.next ?: return // never opens at terminal; defensive
-    Surface(
-        color = MaterialTheme.colorScheme.primaryContainer,
-        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                text = stringResource(R.string.task_gate_question),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(stageLabel(stage)),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = " ▸ ",
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Text(
-                    text = stringResource(stageLabel(next)),
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onKeepRefining) {
-                    Text(stringResource(R.string.task_gate_keep))
-                }
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = onApprove) {
-                    Icon(
-                        Icons.Rounded.Check,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.task_gate_approve))
                 }
             }
         }

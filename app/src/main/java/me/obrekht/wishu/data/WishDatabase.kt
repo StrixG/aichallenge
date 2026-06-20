@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LongTermMemoryEntity::class,
         TaskStateEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class WishDatabase : RoomDatabase() {
@@ -91,9 +91,8 @@ abstract class WishDatabase : RoomDatabase() {
         }
 
         // v5 -> v6: task state machine (Day 13). Add the single-row task_state table — stage + the
-        // model-described step/expected-action, plus the awaitingApproval human-validation gate (set
-        // when a low-confidence completion pauses the FSM on a boundary). Session-scoped: wiped by
-        // clear() alongside facts/summary, so a fresh session starts back at PLANNING.
+        // model-described step/expected-action, plus the awaitingApproval human-validation gate (later
+        // removed in v7). Session-scoped: wiped by clear() alongside facts/summary.
         private val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -105,10 +104,27 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v6 -> v7: drop the human-validation gate. The `awaitingApproval` column is gone — the gate
+        // was removed from the flow (transitions now run pre-turn, PLANNING is deterministic). The
+        // table is session-scoped throwaway state, so recreate it fresh rather than copy rows across.
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `task_state`")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `task_state` " +
+                        "(`id` INTEGER PRIMARY KEY NOT NULL, `stage` TEXT NOT NULL, " +
+                        "`currentStep` TEXT NOT NULL, `expectedAction` TEXT NOT NULL)"
+                )
+            }
+        }
+
         fun getDatabase(context: Context): WishDatabase {
             return INSTANCE ?: synchronized(this) {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+                        MIGRATION_5_6, MIGRATION_6_7
+                    )
                     .build()
                     .also { INSTANCE = it }
             }

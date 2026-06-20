@@ -180,6 +180,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         is ChatEvent.Token -> _uiState.update { state ->
                             state.copy(messages = appendToLast(state.messages, event.delta))
                         }
+                        // Pre-stream: flip the stage badge the moment the FSM advances.
+                        is ChatEvent.TaskAdvanced -> _uiState.update { it.copy(taskState = event.state) }
                         ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
                         is ChatEvent.Complete -> {
                             aux = event.aux
@@ -244,26 +246,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         settingsRepository.setStrategy(strategy)
     }
 
-    /** Day 14 gate — user approved the paused transition: advance exactly one stage and persist. */
-    fun approveStageAdvance() {
-        if (_uiState.value.isStreaming) return
-        viewModelScope.launch {
-            agent.approveStageAdvance()
-            chatHistoryRepository.saveTaskState(agent.taskState())
-            _uiState.update { it.copy(taskState = agent.taskState()) }
-        }
-    }
-
-    /** Day 14 gate — user kept refining: close the gate, stay in the current stage. */
-    fun dismissStageGate() {
-        if (_uiState.value.isStreaming) return
-        viewModelScope.launch {
-            agent.dismissStageGate()
-            chatHistoryRepository.saveTaskState(agent.taskState())
-            _uiState.update { it.copy(taskState = agent.taskState()) }
-        }
-    }
-
     /**
      * Branching/regenerate: fork a new branch off the active one at the last assistant index, load
      * the forked transcript (ending at the user turn), then stream a fresh assistant reply. The old
@@ -304,6 +286,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         is ChatEvent.Token -> _uiState.update { s ->
                             s.copy(messages = appendToLast(s.messages, event.delta))
                         }
+                        // Regenerate never advances the stage, but the event is part of the sealed type.
+                        is ChatEvent.TaskAdvanced -> _uiState.update { it.copy(taskState = event.state) }
                         ChatEvent.MemoryUpdating -> _uiState.update { it.copy(memoryUpdating = true) }
                         is ChatEvent.Complete -> {
                             aux = event.aux

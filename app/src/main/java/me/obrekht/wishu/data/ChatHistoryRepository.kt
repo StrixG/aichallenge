@@ -74,8 +74,7 @@ class ChatHistoryRepository(
         TaskState(
             stage = TaskStage.fromName(it.stage),
             currentStep = it.currentStep,
-            expectedAction = it.expectedAction,
-            awaitingApproval = it.awaitingApproval
+            expectedAction = it.expectedAction
         )
     }
 
@@ -84,8 +83,7 @@ class ChatHistoryRepository(
             TaskStateEntity(
                 stage = state.stage.name,
                 currentStep = state.currentStep,
-                expectedAction = state.expectedAction,
-                awaitingApproval = state.awaitingApproval
+                expectedAction = state.expectedAction
             )
         )
 

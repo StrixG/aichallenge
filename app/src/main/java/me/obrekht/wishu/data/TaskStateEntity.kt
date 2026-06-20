@@ -11,8 +11,5 @@ data class TaskStateEntity(
     @PrimaryKey val id: Int = 0,
     val stage: String,
     val currentStep: String,
-    val expectedAction: String,
-    // Day 14: the human-validation gate — true when a low-confidence completion paused the FSM on a
-    // stage boundary awaiting the user's Approve/Keep-refining. Persisted so the gate survives restart.
-    val awaitingApproval: Boolean = false
+    val expectedAction: String
 )

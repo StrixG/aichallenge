@@ -86,7 +86,4 @@
     <string name="task_stage_done">done</string>
     <string name="task_current_step">Step</string>
     <string name="task_expected_action">Next</string>
-    <string name="task_gate_question">This stage may be complete, but I\'m not sure — move to the next stage?</string>
-    <string name="task_gate_approve">Approve</string>
-    <string name="task_gate_keep">Keep refining</string>
 </resources>
