@@ -27,8 +27,14 @@ sealed interface TaskStage {
             else         -> PLANNING
         }
 
-        /** Ordered list of all stages — replaces the old enum.entries for UI iteration. */
-        val all: List<TaskStage> = listOf(PLANNING, EXECUTION, VALIDATION, DONE)
+        /**
+         * Ordered list of all stages — replaces the old enum.entries for UI iteration.
+         * Must be a computed getter, NOT an initialized `val`: as an eager `val` the list literal
+         * is built during companion `<clinit>`, which can run reentrantly while a `data object`
+         * (PLANNING, reached first via TRANSITION_TABLE) is still mid-initialization — capturing a
+         * null element. The getter defers construction to call-time, after all objects exist.
+         */
+        val all: List<TaskStage> get() = listOf(PLANNING, EXECUTION, VALIDATION, DONE)
     }
 }
 

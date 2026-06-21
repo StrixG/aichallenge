@@ -64,13 +64,15 @@ Language is **not** stored in `SettingsRepository`. It uses AndroidX per-app loc
 
 ### Data
 
-Room (`WishDatabase`, currently **v7**, `exportSchema=false`) with explicit migrations 1→7 — never destructive (except the v7 task_state recreate, which only throws away session-scoped state), each adds a table:
+Room (`WishDatabase`, currently **v10**, `exportSchema=false`) with explicit migrations 1→10 — never destructive (except the v7 task_state recreate, which only throws away session-scoped state), each adds a table or column:
 - v1 `wishes` (`Wish`/`WishDao`) — wishlist, observed as a `Flow` into UI state.
 - v2 `chat_messages` — persisted transcript (gains a `branchId` in v4).
 - v3 `chat_summary` — single-row running summary for the SUMMARY strategy.
 - v4 `chat_branches` (root branch seeded) + `chat_facts` — branch tree + sticky working-memory facts.
 - v5 `long_term_memory` — persistent user profile (untouched by session clear).
 - v6 `task_state` — single-row task state machine snapshot (session-scoped, wiped by session clear). v7 dropped its `awaitingApproval` column. The FSM (`agent/TaskState.kt`) advances one `stage.next` per turn via the single `advance()` mutator, code-gated so the model can never skip. The transition runs **pre-turn** — `WishChatAgent.advanceTaskState(userMessage)` (helper flash call) decides completion *before* the reply streams, so the reply is generated under the new stage and the UI stage badge flips immediately (`ChatEvent.TaskAdvanced`); content never lags the stage by a turn. **PLANNING completion is deterministic**: the helper reports the four requirement slots (`recipient_known`/`occasion_known`/`budget_known`/`tastes_known`) and *code* requires all four — the model's single `stage_complete` boolean proved flaky there. Later stages still use the model's `stage_complete`. (An earlier `confidence`/`awaitingApproval` human-approval banner was removed entirely in v7 — no gate, every completion auto-advances.)
+- v8 `invariants` (Day 14) — persistent rules the assistant can't break; survives session clear (v9 dropped its unused `scope`/`taskId` columns).
+- v10 added `task_state` columns `strategyPending` + `briefSnapshot` + `ideasSnapshot` (Day 15) — non-destructive ALTER. Stages are a sealed `TaskStage` interface with a single `TRANSITION_TABLE` (`agent/TaskState.kt`) as the only authority on legal moves; `advance()` steps one `forward`, `regressTo()` only follows the `regress` set (VALIDATION→EXECUTION on invariant violation). PLANNING has two sub-phases (`strategyPending`): gather the four data slots, then await `strategy_confirmed` before EXECUTION. Artifact snapshots (`briefSnapshot`/`ideasSnapshot`) captured on stage exit and re-injected so context survives trimming and restart.
 
 ## Conventions
 

@@ -47,9 +47,11 @@ private const val WORKING_MEMORY_PROMPT =
         "facts and the latest user/assistant exchange, output the UPDATED facts in TOON " +
         "(Token-Oriented Object Notation): one 'key: value' per line, short snake_case keys, short " +
         "single-line string values, no braces/quotes/commas. Capture durable facts only: recipient, " +
-        "occasion, budget, stated likes, dislikes, constraints, and decisions already made. Keep at " +
-        "most ~12 keys; keep everything still relevant. Output ONLY the TOON lines — no prose, no " +
-        "code fences. Example:\nrecipient: mom\noccasion: birthday\nbudget: ~3000 RUB"
+        "occasion, budget, stated likes, dislikes, constraints, and decisions already made. Prior " +
+        "facts are RETAINED automatically — you only need to output facts that are NEW or CHANGED " +
+        "this turn (re-emit a key only to correct its value). Never re-state the recipient just to " +
+        "keep it; it is kept for you. Output ONLY the TOON lines — no prose, no code fences. If " +
+        "nothing is new or changed, output nothing. Example:\nrecipient: mom\noccasion: birthday\nbudget: ~3000 RUB"
 
 private const val LONG_TERM_MEMORY_PROMPT =
     "You maintain a persistent profile of THE USER (the person chatting), across wishlist " +
@@ -62,8 +64,10 @@ private const val LONG_TERM_MEMORY_PROMPT =
         "CRITICAL: a gift recipient is NOT the user. A recipient's traits, likes, occasion, or " +
         "relationship (mom, friend, birthday, their love of gardening) are task data and must NEVER " +
         "enter this profile. Only record a trait under user_interests if the USER states it about " +
-        "THEMSELVES. If the exchange reveals nothing durable about the user, return the profile " +
-        "unchanged. Output the profile in TOON (Token-Oriented Object Notation): one 'key: value' " +
+        "THEMSELVES. Prior profile facts are RETAINED automatically — output ONLY keys that are NEW " +
+        "or CHANGED this turn (re-emit a key only to correct its value); never re-state a key just to " +
+        "keep it. If the exchange reveals nothing new or changed about the user, output nothing. " +
+        "Output the profile in TOON (Token-Oriented Object Notation): one 'key: value' " +
         "per line, no braces/quotes/commas. Output ONLY the TOON lines — no prose, no code fences. " +
         "Example:\nuser_name: Nikita\nlanguage: ru\ncommunication_style: concise"
 
@@ -513,11 +517,12 @@ class WishChatAgent(
         // Mechanical extract/merge — no chain-of-thought needed; disable thinking to save tokens.
         val (text, usage) = helperCall(WORKING_MEMORY_PROMPT, instruction, thinking = false)
         text?.let {
-            val parsed = Toon.decode(it)
-            if (parsed.isNotEmpty()) {
-                facts.clear()
-                facts.putAll(parsed)
-            }
+            // MERGE, never replace. The flash helper is fed the current facts and told to keep them,
+            // but on a turn that doesn't mention an earlier fact (e.g. the recipient) it routinely
+            // omits it from its output. A clear()+putAll would then drop that fact — the agent
+            // "forgetting the gift recipient". Merging lets the model overwrite a value (recipient
+            // mom -> dad) while guaranteeing an unmentioned key is never silently lost.
+            facts.putAll(Toon.decode(it))
         }
         return usage
     }
@@ -535,11 +540,11 @@ class WishChatAgent(
             }
             val (text, _) = helperCall(LONG_TERM_MEMORY_PROMPT, instruction)
             text?.let {
-                val parsed = Toon.decode(it)
-                if (parsed.isNotEmpty()) {
-                    longTerm.clear()
-                    longTerm.putAll(parsed)
-                }
+                // MERGE, never replace — same reason as working memory (refreshWorkingMemory): the flash
+                // helper omits an unmentioned key (e.g. user_name) on a turn that doesn't touch it, and a
+                // clear()+putAll would drop it. Merging keeps the key and still lets the model overwrite
+                // a value. Wiping long-term entirely is a separate, explicit path (Settings clear memory).
+                longTerm.putAll(Toon.decode(it))
             }
         }
     }
@@ -555,20 +560,6 @@ class WishChatAgent(
             val s = taskMachine.state
             if (s.stage.next == null) return@runCatching // terminal stage: nothing to advance
 
-            // Day 14 — FSM coupling: at VALIDATION, run the invariant layers over the ideas already on
-            // the table (the last assistant turn) before letting the task reach DONE. A violation
-            // regresses to EXECUTION — code-gated (TaskStateMachine.regressTo), not the model's call —
-            // so a bad pick can never slip through to DONE. Return early: no advance this turn.
-            if (s.stage == TaskStage.VALIDATION && invariants.isNotEmpty()) {
-                val proposed = history.lastOrNull { it.role == "assistant" }?.content.orEmpty()
-                if (proposed.isNotBlank() &&
-                    checkViolations(proposed, invariants, includeSoft = false).isNotEmpty()
-                ) {
-                    taskMachine.regressTo(TaskStage.EXECUTION)
-                    return@runCatching
-                }
-            }
-
             val instruction = buildString {
                 append("Current stage: ").append(s.stage.name.lowercase()).append("\n\n")
                 // Inject working memory so the check sees requirements (recipient, budget, tastes)
@@ -576,6 +567,19 @@ class WishChatAgent(
                 // strategies that trim history (sliding window, sticky facts).
                 if (facts.isNotEmpty()) {
                     append("Known facts so far (TOON):\n").append(factsToon).append("\n\n")
+                }
+                // Recent transcript tail. Working memory alone is NOT enough: its capture is a lossy,
+                // one-turn-lagged flash call, so a slot stated a turn or two ago (e.g. the occasion)
+                // can be missing from facts AND from the latest message — the helper then reports that
+                // slot 'no' and the task gets stuck re-asking for something already given. The raw tail
+                // lets the helper see what was actually said, independent of capture. (history does NOT
+                // yet contain the current user turn here — it's appended only after a successful reply —
+                // so the latest message below is not duplicated.)
+                val recent = history.takeLast(WINDOW)
+                if (recent.isNotEmpty()) {
+                    append("Recent conversation:\n")
+                    recent.forEach { append(it.role).append(": ").append(it.content).append('\n') }
+                    append('\n')
                 }
                 append("The user's latest message:\n")
                 append("user: ").append(userText).append('\n')
@@ -615,6 +619,25 @@ class WishChatAgent(
                     else -> known("stage_complete")
                 }
                 if (complete) {
+                    // Day 14/15 — FSM coupling: ONLY on the finalizing turn (the one that would move
+                    // VALIDATION → DONE), verify the proposed pick honors the invariants. A HARD
+                    // violation regresses to EXECUTION — code-gated (TaskStateMachine.regressTo), not
+                    // the model's call — so a bad pick can never slip through to DONE.
+                    //
+                    // This deliberately runs on the finalizing turn only, NOT on every VALIDATION turn:
+                    // a brainstorm legitimately lists pricier ALTERNATIVES (ranges, "stretch" picks)
+                    // above the budget ceiling, and re-scanning that whole blob on a mere refinement
+                    // turn (e.g. the user just choosing a color) spuriously tripped the budget ceiling
+                    // on an option the user never selected, bouncing the task back to EXECUTION.
+                    if (s.stage == TaskStage.VALIDATION && invariants.isNotEmpty()) {
+                        val proposed = history.lastOrNull { it.role == "assistant" }?.content.orEmpty()
+                        if (proposed.isNotBlank() &&
+                            checkViolations(proposed, invariants, includeSoft = false).isNotEmpty()
+                        ) {
+                            taskMachine.regressTo(TaskStage.EXECUTION)
+                            return@runCatching
+                        }
+                    }
                     // Capture the stage artifact BEFORE advancing so the snapshot is available in
                     // the new stage's context immediately on the same turn.
                     when (s.stage) {
@@ -777,13 +800,20 @@ class WishChatAgent(
                     )
                 } else {
                     // Sub-phase 2: all four slots are filled — propose a strategy and await confirmation.
+                    // HARD RULE first, then the task: the earlier "search strategy for gift ideas" wording
+                    // primed the model into naming concrete products, so the ban is stated up front and the
+                    // strategy is framed as an ABSTRACT approach (directions/types), never example items.
                     append(
-                        "All requirements are now gathered. Work ONLY on strategy confirmation: " +
-                            "briefly summarize the gift brief (recipient, occasion, budget, tastes) so the user " +
-                            "can see everything at a glance, then propose a concrete search strategy for finding " +
-                            "gift ideas (e.g. categories to explore, price anchors, style filters). Ask the user " +
-                            "to confirm or refine the strategy before you start proposing ideas. " +
-                            "HARD RULE: do NOT propose any concrete gift, product, or brand yet.\n"
+                        "All requirements are now gathered, but you are STILL in planning. " +
+                            "HARD RULE: name NO concrete gift, product, brand, model, or specific item yet — " +
+                            "not even one, not as an example, not to illustrate a category. If you catch " +
+                            "yourself about to write a product name, stop and describe the direction instead. " +
+                            "Concrete ideas come only AFTER the user confirms the strategy, in the next stage.\n" +
+                            "Work ONLY on strategy confirmation: briefly summarize the gift brief (recipient, " +
+                            "occasion, budget, tastes) so the user sees it at a glance, then propose a SEARCH " +
+                            "STRATEGY described ABSTRACTLY — the broad approach only: which TYPES of categories " +
+                            "to explore, how to split the budget, what style/qualities to favor. Then ask the " +
+                            "user to confirm or refine the strategy before you go further.\n"
                     )
                 }
             }
