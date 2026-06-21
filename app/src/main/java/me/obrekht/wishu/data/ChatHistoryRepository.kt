@@ -74,7 +74,10 @@ class ChatHistoryRepository(
         TaskState(
             stage = TaskStage.fromName(it.stage),
             currentStep = it.currentStep,
-            expectedAction = it.expectedAction
+            expectedAction = it.expectedAction,
+            strategyPending = it.strategyPending,
+            briefSnapshot = it.briefSnapshot,
+            ideasSnapshot = it.ideasSnapshot
         )
     }
 
@@ -83,7 +86,10 @@ class ChatHistoryRepository(
             TaskStateEntity(
                 stage = state.stage.name,
                 currentStep = state.currentStep,
-                expectedAction = state.expectedAction
+                expectedAction = state.expectedAction,
+                strategyPending = state.strategyPending,
+                briefSnapshot = state.briefSnapshot,
+                ideasSnapshot = state.ideasSnapshot
             )
         )
 
