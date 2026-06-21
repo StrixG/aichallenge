@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TaskStateEntity::class,
         InvariantEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class WishDatabase : RoomDatabase() {
@@ -134,6 +134,24 @@ abstract class WishDatabase : RoomDatabase() {
             }
         }
 
+        // v9 -> v10: controlled state transitions (Day 15). Add strategy-pending flag and stage
+        // artifact snapshot columns to task_state. Non-destructive ALTER TABLE preserves existing
+        // session data. strategyPending: NOT NULL INTEGER DEFAULT 0 (Room maps Boolean → INTEGER).
+        // briefSnapshot / ideasSnapshot: nullable TEXT (NULL is the SQL default).
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `task_state` ADD COLUMN `strategyPending` INTEGER NOT NULL DEFAULT 0"
+                )
+                db.execSQL(
+                    "ALTER TABLE `task_state` ADD COLUMN `briefSnapshot` TEXT"
+                )
+                db.execSQL(
+                    "ALTER TABLE `task_state` ADD COLUMN `ideasSnapshot` TEXT"
+                )
+            }
+        }
+
         // v8 -> v9: drop the unused invariant `scope`/`taskId` columns. The GLOBAL/PROJECT scope was
         // never enforced (all invariants always applied), so the distinction was dead weight. Recreate
         // the table without those columns, copying existing rules across so user-added invariants survive.
@@ -161,7 +179,8 @@ abstract class WishDatabase : RoomDatabase() {
                 Room.databaseBuilder(context, WishDatabase::class.java, "wish_database")
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+                        MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     .build()
                     .also { INSTANCE = it }
