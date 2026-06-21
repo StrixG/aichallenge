@@ -73,7 +73,8 @@ private const val LONG_TERM_MEMORY_PROMPT =
 private const val TASK_STATE_PROMPT =
     "You track a gift-planning task through four FIXED stages, strictly in this order: " +
         "planning -> execution -> validation -> done. Stage goals: " +
-        "planning = the requirements are gathered (recipient, occasion, budget, the recipient's tastes); " +
+        "planning = the requirements are gathered (recipient, occasion, budget, the recipient's tastes) " +
+        "AND the user has confirmed the proposed search strategy; " +
         "execution = concrete gift ideas have been proposed; " +
         "validation = the user has confirmed or picked among the ideas; done = the task is closed. " +
         "You are told the CURRENT stage, the known facts gathered so far, and the user's latest message. " +
@@ -83,16 +84,21 @@ private const val TASK_STATE_PROMPT =
         "First, the four PLANNING requirements about the gift — for each, is it explicitly known: " +
         "recipient_known (who the gift is for), occasion_known (the occasion), budget_known (a budget " +
         "or price range), tastes_known (the recipient's tastes, hobbies, or preferences). " +
+        "Then strategy_confirmed: whether the user has explicitly confirmed (agreed to / approved) the " +
+        "proposed search strategy in their latest message — mark 'yes' ONLY if the user says yes/ok/ " +
+        "confirm or equivalent; mark 'no' if no strategy has been proposed yet or the user has not " +
+        "responded to it. " +
         "Then stage_complete: whether the CURRENT stage's own goal is met — for execution = concrete " +
         "gift ideas have actually been proposed; for validation = the user has confirmed or picked an " +
-        "idea; for done = n/a (report no). (For planning the app decides completion from the four flags " +
+        "idea; for done = n/a (report no). (For planning the app decides completion from the five flags " +
         "above, so stage_complete is ignored there — you may report no.) " +
-        "Output in TOON (Token-Oriented Object Notation): exactly these seven lines, no braces/quotes/commas, " +
+        "Output in TOON (Token-Oriented Object Notation): exactly these eight lines, no braces/quotes/commas, " +
         "no prose, no code fences:\n" +
         "recipient_known: yes|no\n" +
         "occasion_known: yes|no\n" +
         "budget_known: yes|no\n" +
         "tastes_known: yes|no\n" +
+        "strategy_confirmed: yes|no\n" +
         "stage_complete: yes|no\n" +
         "current_step: <short description of what is happening now, in the conversation's language>\n" +
         "expected_action: <short description of what is expected next, in the conversation's language>"
@@ -582,19 +588,45 @@ class WishChatAgent(
                     currentStep = parsed["current_step"].orEmpty(),
                     expectedAction = parsed["expected_action"].orEmpty()
                 )
-                // Code-gated transition, advancing by exactly ONE stage. The model cannot name or pick
-                // the target stage. PLANNING completion is decided DETERMINISTICALLY here — all four
-                // requirement slots must be explicitly known — rather than trusting the model's single
-                // boolean, which proved flaky (it returned stage_complete: yes with requirements still
-                // missing). Later stages still use the model's stage_complete (no slot checklist fits).
                 fun known(key: String) = parsed[key].equals("yes", ignoreCase = true)
+
+                // Day 15 — PLANNING has two sub-phases:
+                //   Phase 1: gather all four data slots (recipient, occasion, budget, tastes).
+                //   Phase 2: once all four are filled, the agent proposes a search strategy; the user
+                //            must confirm it (strategy_confirmed: yes) before advancing to EXECUTION.
                 val complete = when (s.stage) {
-                    TaskStage.PLANNING ->
-                        known("recipient_known") && known("occasion_known") &&
+                    TaskStage.PLANNING -> {
+                        val allFourFilled = known("recipient_known") && known("occasion_known") &&
                             known("budget_known") && known("tastes_known")
+                        if (allFourFilled) {
+                            if (known("strategy_confirmed")) {
+                                taskMachine.setStrategyPending(false)
+                                true
+                            } else {
+                                // Phase 2 begins or is ongoing: signal the model to propose/await strategy.
+                                taskMachine.setStrategyPending(true)
+                                false
+                            }
+                        } else {
+                            if (s.strategyPending) taskMachine.setStrategyPending(false)
+                            false
+                        }
+                    }
                     else -> known("stage_complete")
                 }
-                if (complete) taskMachine.advance()
+                if (complete) {
+                    // Capture the stage artifact BEFORE advancing so the snapshot is available in
+                    // the new stage's context immediately on the same turn.
+                    when (s.stage) {
+                        TaskStage.PLANNING -> taskMachine.captureArtifact(brief = factsToon)
+                        TaskStage.EXECUTION -> {
+                            val lastAssistant = history.lastOrNull { it.role == "assistant" }?.content
+                            taskMachine.captureArtifact(ideas = lastAssistant)
+                        }
+                        else -> Unit
+                    }
+                    taskMachine.advance()
+                }
             }
         }
     }
@@ -726,28 +758,62 @@ class WishChatAgent(
 
     // Inject the FIXED current task stage so the model focuses on it and doesn't run ahead. Behavior
     // alignment only — the structural no-skip guarantee lives in [TaskStateMachine].
+    // Day 15: PLANNING has two sub-phases driven by [TaskState.strategyPending]; EXECUTION and
+    // VALIDATION inject artifact snapshots so context is available even under aggressive trimming.
     private fun taskStageContext(s: TaskState): String = buildString {
         append("Task state machine — the task moves through fixed stages in order: ")
         append("planning -> execution -> validation -> done. ")
         append("The CURRENT stage is: ").append(s.stage.name).append(".\n")
         when (s.stage) {
-            TaskStage.PLANNING -> append(
-                "Work ONLY on planning: gather the missing requirements (recipient, occasion, budget, " +
-                    "the recipient's tastes) by asking ONE question at a time. " +
-                    "HARD RULE: do NOT name, propose, list, hint at, or finalize ANY concrete gift, " +
-                    "product, or brand yet — not even an example. Even if an idea is obvious to you, " +
-                    "keep it to yourself and keep asking until the requirements are complete.\n"
-            )
-            TaskStage.EXECUTION -> append(
-                "Work ONLY on execution: propose concrete gift ideas that fit the gathered requirements. " +
-                    "HARD RULE: present them as OPTIONS to consider — do NOT declare a single final " +
-                    "choice or say 'Финальный выбор' / 'final pick'. Picking is the next stage, the " +
-                    "user's job, not yours.\n"
-            )
-            TaskStage.VALIDATION -> append(
-                "Work ONLY on validation: help the user confirm or pick among the ideas ALREADY proposed; " +
-                    "refine on request. Do NOT invent a brand-new idea set or start an unrelated task.\n"
-            )
+            TaskStage.PLANNING -> {
+                if (!s.strategyPending) {
+                    // Sub-phase 1: gather the four data slots, one question at a time.
+                    append(
+                        "Work ONLY on planning: gather the missing requirements (recipient, occasion, budget, " +
+                            "the recipient's tastes) by asking ONE question at a time. " +
+                            "HARD RULE: do NOT name, propose, list, hint at, or finalize ANY concrete gift, " +
+                            "product, or brand yet — not even an example. Even if an idea is obvious to you, " +
+                            "keep it to yourself and keep asking until the requirements are complete.\n"
+                    )
+                } else {
+                    // Sub-phase 2: all four slots are filled — propose a strategy and await confirmation.
+                    append(
+                        "All requirements are now gathered. Work ONLY on strategy confirmation: " +
+                            "briefly summarize the gift brief (recipient, occasion, budget, tastes) so the user " +
+                            "can see everything at a glance, then propose a concrete search strategy for finding " +
+                            "gift ideas (e.g. categories to explore, price anchors, style filters). Ask the user " +
+                            "to confirm or refine the strategy before you start proposing ideas. " +
+                            "HARD RULE: do NOT propose any concrete gift, product, or brand yet.\n"
+                    )
+                }
+            }
+            TaskStage.EXECUTION -> {
+                append(
+                    "Work ONLY on execution: propose concrete gift ideas that fit the gathered requirements. " +
+                        "HARD RULE: present them as OPTIONS to consider — do NOT declare a single final " +
+                        "choice or say 'Финальный выбор' / 'final pick'. Picking is the next stage, the " +
+                        "user's job, not yours.\n"
+                )
+                // Inject the brief snapshot so requirements are in scope even under aggressive trimming.
+                s.briefSnapshot?.takeIf { it.isNotBlank() }?.let { brief ->
+                    append("Requirements brief (captured when planning was complete):\n")
+                    append(brief).append('\n')
+                }
+            }
+            TaskStage.VALIDATION -> {
+                append(
+                    "Work ONLY on validation: help the user confirm or pick among the ideas ALREADY proposed; " +
+                        "refine on request. Do NOT invent a brand-new idea set or start an unrelated task.\n"
+                )
+                // Inject brief + ideas snapshots so validation always has both the requirements and
+                // the proposed options in context, even if the transcript is trimmed.
+                s.briefSnapshot?.takeIf { it.isNotBlank() }?.let { brief ->
+                    append("Requirements brief:\n").append(brief).append('\n')
+                }
+                s.ideasSnapshot?.takeIf { it.isNotBlank() }?.let { ideas ->
+                    append("Ideas proposed in execution:\n").append(ideas).append('\n')
+                }
+            }
             TaskStage.DONE -> append(
                 "The task is done. Acknowledge completion; offer to start a new task if the user wants.\n"
             )
