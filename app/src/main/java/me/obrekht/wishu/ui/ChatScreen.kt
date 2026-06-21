@@ -451,7 +451,7 @@ private fun TaskStatePanel(taskState: TaskState) {
 @Composable
 private fun StageTrail(stage: TaskStage) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TaskStage.entries.forEachIndexed { i, s ->
+        TaskStage.all.forEachIndexed { i, s ->
             val active = s == stage
             Text(
                 text = stringResource(stageLabel(s)),
@@ -460,7 +460,7 @@ private fun StageTrail(stage: TaskStage) {
                 color = if (active) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
-            if (i < TaskStage.entries.lastIndex) {
+            if (i < TaskStage.all.lastIndex) {
                 Text(
                     text = " ▸ ",
                     style = MaterialTheme.typography.labelSmall,
